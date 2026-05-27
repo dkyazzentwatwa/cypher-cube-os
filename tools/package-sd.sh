@@ -39,10 +39,19 @@ cp -f "${APP_DIST}/apps.json" "${SD_APPS}/apps.json"
 find "${APP_DIST}" -maxdepth 1 -type f -name "*.bin" -exec cp -f {} "${SD_APPS}/" \;
 
 mkdir -p \
-  "${SD_OS}/cardputer-games" \
-  "${SD_OS}/cardputer-game-os/saves" \
-  "${SD_OS}/cardputer-game-os/states" \
-  "${SD_OS}/tarot"
+  "${SD_OS}/cypherbox/logs" \
+  "${SD_OS}/cypherbox/payloads/macos"
+
+if [[ ! -f "${SD_OS}/cypherbox/payloads/macos/hello.duck" ]]; then
+  cat > "${SD_OS}/cypherbox/payloads/macos/hello.duck" <<'TXT'
+REM Harmless Waveshare Cypherbox test payload
+STRINGLN Hello from Waveshare Cypherbox
+TXT
+fi
+
+if [[ ! -f "${SD_OS}/cypherbox/COUNTER.TXT" ]]; then
+  printf "0\n" > "${SD_OS}/cypherbox/COUNTER.TXT"
+fi
 
 cat > "${SD_OS}/README.txt" <<'TXT'
 Waveshare AMOLED Cypher OS SD card
@@ -54,6 +63,9 @@ into the app1 partition.
 BOOT short press backs out inside most apps.
 BOOT long press returns to the launcher.
 Serial fallback is 115200 baud.
+
+Cypherbox Mini-derived wireless logs live in waveshare-os/cypherbox/logs.
+BLE HID DuckyScript payloads live in waveshare-os/cypherbox/payloads.
 TXT
 
 echo "[sd] prepared ${SD_ROOT}"

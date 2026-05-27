@@ -48,8 +48,11 @@ in the README for nonstandard layouts.
 
 ## App Status
 
-The catalog is the Cypher OS app set minus `starbeam_v2`, plus the two local
-Waveshare diagnostics. `cypher-drive`, `cypher-chat`, and `flock-you` are direct
-Waveshare AMOLED profile builds. Cardputer keyboard/audio/pin-heavy apps live
-here as touch-native Lite or hardware-required ports. Keep per-app user docs in
-`docs/apps/` whenever the catalog changes.
+The catalog ships the five direct apps (`touch-diagnostics`, `sd-status`,
+`cypher-drive`, `cypher-chat`, and `flock-you`) plus grouped Cypherbox
+Mini-derived wireless ports for WiFi and BLE tools. Do not package the legacy
+Cardputer Lite or GameOS source folders unless the user explicitly reopens that
+scope. Keep NFC, APDU, tag-emulation, GPS, and wardriver features out of the
+Waveshare catalog until external PN532/GPS wiring is requested.
+
+Keep per-app user docs in `docs/apps/` whenever the catalog changes.

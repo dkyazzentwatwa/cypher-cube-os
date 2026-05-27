@@ -36,7 +36,9 @@ constexpr const char* APP_DIR = "/waveshare-os/apps";
 constexpr const char* APP_MANIFEST = "/waveshare-os/apps/apps.json";
 constexpr const char* PREF_NS = "wamoledos";
 constexpr uint8_t MAX_APPS = 32;
-constexpr size_t FLASH_CHUNK = 4096;
+constexpr size_t FLASH_CHUNK = 16384;
+constexpr size_t FLASH_SECTOR_SIZE = 4096;
+constexpr size_t FLASH_ERASE_CHUNK = 65536;
 constexpr uint8_t ESP_APP_IMAGE_MAGIC = 0xE9;
 
 constexpr uint16_t COLOR_BG = 0x0000;
@@ -48,4 +50,3 @@ constexpr uint16_t COLOR_ACCENT = 0x07FF;
 constexpr uint16_t COLOR_GOOD = 0x07E0;
 constexpr uint16_t COLOR_WARN = 0xFD20;
 constexpr uint16_t COLOR_BAD = 0xF800;
-

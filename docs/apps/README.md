@@ -6,11 +6,12 @@ This folder documents each app that `./tools/build-apps.sh` writes into
 Status meanings:
 
 - `ready`: direct Waveshare AMOLED build or full local diagnostic app.
-- `lite`: touch-first simplified port that avoids Cardputer keyboard, speaker,
-  or pin assumptions.
-- `campaign_lite`: touch-first Story Lite RPG with campaign state, stats,
-  quest/lore screens, inventory, and SD journal/state files.
+- `cypherbox_port`: grouped Cypherbox Mini-derived wireless app for built-in
+  Waveshare hardware, WiFi/BLE radio, touch, SD, and serial.
 - `build_failed`: source was discovered but did not compile; not installable.
 
 All installable app binaries are sketch `.bin` files intended for the launcher's
 `app1` slot. Merged, bootloader, and partition images are not packaged.
+
+The current catalog intentionally excludes NFC, APDU Lab, tag emulation, GPS,
+and wardriver features because those require external PN532/GPS modules.

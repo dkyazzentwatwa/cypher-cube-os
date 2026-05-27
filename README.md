@@ -37,6 +37,7 @@ arduino-cli lib install "ArduinoJson"
 arduino-cli lib install "GFX Library for Arduino"
 arduino-cli lib install "Adafruit XCA9554"
 arduino-cli lib install "Adafruit BusIO"
+arduino-cli lib install "NimBLE-Arduino"
 ```
 
 Install Waveshare's offline `Arduino_DriveBus` library from the official sample
@@ -89,21 +90,30 @@ Expected layout:
 /waveshare-os/apps/cypher-drive.bin
 /waveshare-os/apps/cypher-chat.bin
 /waveshare-os/apps/flock-you.bin
-/waveshare-os/apps/cardputer-games-lite.bin
-/waveshare-os/cardputer-game-os/saves/
-/waveshare-os/cardputer-game-os/states/
-/waveshare-os/cardputer-games/
-/waveshare-os/tarot/
+/waveshare-os/apps/cypherbox-wifi-tools.bin
+/waveshare-os/apps/cypherbox-ble-tools.bin
+/waveshare-os/cypherbox/COUNTER.TXT
+/waveshare-os/cypherbox/logs/
+/waveshare-os/cypherbox/payloads/macos/hello.duck
 ```
 
-The generated manifest currently targets the Cypher OS catalog minus
-`starbeam_v2`, plus the two local Waveshare diagnostic apps. Direct AMOLED
-profile builds are used for `cypher-drive`, `cypher-chat`, and `flock-you`.
-Apps that depend on Cardputer keyboard/audio/pin behavior ship as touch-first
-Lite or campaign Lite ports. Hardware-restricted tools and unproven audio apps
-are intentionally kept out of the shipped catalog. The Game OS text RPGs use
-local campaign state, journal saves, stats, quest screens, lore screens, and
-pack screens without online services.
+The generated manifest currently ships the two local Waveshare diagnostics,
+direct AMOLED profile builds for `cypher-drive`, `cypher-chat`, and `flock-you`,
+plus two grouped Cypherbox Mini-derived wireless ports:
+
+- `cypherbox-wifi-tools`: WiFi scan, heatmap, captive portal, active WiFi lab
+  attacks, read-only SD web server, and USB serial commands.
+- `cypherbox-ble-tools`: BLE Serial, BLE scan/export, BLE advertising spam,
+  BLE HID DuckyScript payloads, mouse jiggler, pairing tools, and USB serial
+  commands.
+
+NFC, APDU Lab, tag emulation, GPS, and wardriver are intentionally not included
+in this Waveshare catalog pass because they require external PN532/GPS hardware.
+Legacy Cardputer Lite and GameOS source folders may remain in the repo, but they
+are not built, packaged, or advertised by `tools/build-apps.sh`.
+
+The Cypherbox wireless ports include active lab tools. Use them only on radios,
+networks, devices, and hosts you own or have explicit permission to test.
 
 Sibling repo discovery defaults to repos beside this checkout. Override as
 needed:

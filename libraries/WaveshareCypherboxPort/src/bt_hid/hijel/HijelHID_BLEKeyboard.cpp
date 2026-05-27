@@ -1,0 +1,1318 @@
+/**
+ * HijelHID_BLEKeyboard.cpp
+ *
+ * Implementation of the HijelHID_BLEKeyboard library.
+ * Built on NimBLE-Arduino 2.3.8+
+ *
+ * Copyright (c) 2026 Hijel. All rights reserved.
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     https://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, this software
+ * is provided "AS IS", WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
+ * express or implied. The author(s) accept no liability for any damages,
+ * loss, or consequences arising from the use or misuse of this software.
+ * See the License for the full terms governing permissions and limitations.
+ */
+
+#include "HijelHID_BLEKeyboard.h"
+#include <stdarg.h>
+
+// ─── HID Report Descriptor ────────────────────────────────────────────────
+//
+// Two top-level collections:
+//   Report ID 0x01 — Standard keyboard (8-byte input + 1-byte LED output)
+//   Report ID 0x02 — Consumer Control  (2-byte 16-bit usage ID input)
+//
+// Keyboard report layout (8 bytes):
+//   Byte 0: Modifier bitmask  (Ctrl / Shift / Alt / GUI × Left / Right)
+//   Byte 1: Reserved (always 0x00)
+//   Bytes 2–7: Up to 6 simultaneous keycodes (6KRO)
+//
+// Consumer report layout (2 bytes):
+//   16-bit usage ID, little-endian. 0x0000 = all released.
+
+static const uint8_t _hidReportDescriptor[] = {
+
+    // ── Keyboard (Report ID 0x01) ──────────────────────────────────────
+    0x05, 0x01,        // Usage Page (Generic Desktop)
+    0x09, 0x06,        // Usage (Keyboard)
+    0xA1, 0x01,        // Collection (Application)
+    0x85, 0x01,        //   Report ID (1)
+
+    // Modifier byte — 8 bits, one per modifier key (Left/Right Ctrl/Shift/Alt/GUI)
+    0x05, 0x07,        //   Usage Page (Key Codes)
+    0x19, 0xE0,        //   Usage Minimum (Left Control  = 0xE0)
+    0x29, 0xE7,        //   Usage Maximum (Right GUI     = 0xE7)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x25, 0x01,        //   Logical Maximum (1)
+    0x75, 0x01,        //   Report Size (1 bit)
+    0x95, 0x08,        //   Report Count (8)
+    0x81, 0x02,        //   Input (Data, Variable, Absolute)
+
+    // Reserved byte
+    0x95, 0x01,        //   Report Count (1)
+    0x75, 0x08,        //   Report Size (8 bits)
+    0x81, 0x01,        //   Input (Constant)
+
+    // LED output report — 5 lock-key LEDs + 3 padding bits
+    0x95, 0x05,        //   Report Count (5)
+    0x75, 0x01,        //   Report Size (1 bit)
+    0x05, 0x08,        //   Usage Page (LEDs)
+    0x19, 0x01,        //   Usage Minimum (Num Lock)
+    0x29, 0x05,        //   Usage Maximum (Kana)
+    0x91, 0x02,        //   Output (Data, Variable, Absolute)
+    0x95, 0x01,        //   Report Count (1)
+    0x75, 0x03,        //   Report Size (3 bits)
+    0x91, 0x01,        //   Output (Constant) — padding to complete the byte
+
+    // 6-key rollover keycode array
+    // Logical Maximum 0xE7 covers all standard keys including international
+    // and language keys up to KEY_RGUI.
+    0x95, 0x06,        //   Report Count (6)
+    0x75, 0x08,        //   Report Size (8 bits)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x26, 0xE7, 0x00,  //   Logical Maximum (0xE7)
+    0x05, 0x07,        //   Usage Page (Key Codes)
+    0x19, 0x00,        //   Usage Minimum (0)
+    0x2A, 0xE7, 0x00,  //   Usage Maximum (0xE7)
+    0x81, 0x00,        //   Input (Data, Array, Absolute)
+
+    0xC0,              // End Collection (Keyboard)
+
+    // ── Consumer Control (Report ID 0x02) ─────────────────────────────
+    // Logical Maximum 0x3FF covers all MEDIA_* values defined in
+    // BLEHIDMediaKeys.h without any descriptor change.
+    0x05, 0x0C,        // Usage Page (Consumer)
+    0x09, 0x01,        // Usage (Consumer Control)
+    0xA1, 0x01,        // Collection (Application)
+    0x85, 0x02,        //   Report ID (2)
+    0x15, 0x00,        //   Logical Minimum (0)
+    0x26, 0xFF, 0x03,  //   Logical Maximum (1023 / 0x3FF)
+    0x19, 0x00,        //   Usage Minimum (0)
+    0x2A, 0xFF, 0x03,  //   Usage Maximum (0x3FF)
+    0x75, 0x10,        //   Report Size (16 bits)
+    0x95, 0x01,        //   Report Count (1)
+    0x81, 0x00,        //   Input (Data, Array, Absolute)
+    0xC0,              // End Collection (Consumer Control)
+
+    // ── Mouse (Report ID 0x03) — cypherbox fork ───────────────────────
+    0x05, 0x01,        // Usage Page (Generic Desktop)
+    0x09, 0x02,        // Usage (Mouse)
+    0xA1, 0x01,        // Collection (Application)
+    0x85, 0x03,        //   Report ID (3)
+    0x09, 0x01,        //   Usage (Pointer)
+    0xA1, 0x00,        //   Collection (Physical)
+    0x05, 0x09,        //     Usage Page (Buttons)
+    0x19, 0x01, 0x29, 0x03,              //   Usage Min/Max (buttons 1..3)
+    0x15, 0x00, 0x25, 0x01,              //   Logical Min/Max (0..1)
+    0x95, 0x03, 0x75, 0x01, 0x81, 0x02,  //   3 button bits
+    0x95, 0x01, 0x75, 0x05, 0x81, 0x03,  //   5 bits padding
+    0x05, 0x01,        //     Usage Page (Generic Desktop)
+    0x09, 0x30, 0x09, 0x31, 0x09, 0x38,  //   X, Y, Wheel
+    0x15, 0x81, 0x25, 0x7F,              //   Logical Min/Max (-127..127)
+    0x75, 0x08, 0x95, 0x03, 0x81, 0x06,  //   3 bytes, relative
+    0xC0,              //   End Collection (Physical)
+    0xC0,              // End Collection (Mouse)
+};
+
+// ─── ASCII → HID Lookup Tables ───────────────────────────────────────────
+// Index into these with (ascii_value - 0x20) for printable ASCII 0x20–0x7E.
+// Control characters (\n, \r, \t, BS, ESC) are handled explicitly in write()
+// before these tables are consulted.
+//
+// _kcTable  — the HID keycode to send
+// _modTable — the modifier byte to send alongside it (0 or KEY_MOD_LSHIFT)
+
+static const uint8_t _kcTable[95] = {
+    // 0x20..0x2F  (space ! " # $ % & ' ( ) * + , - . /)
+    KEY_SPACE, KEY_1, KEY_APOSTROPHE, KEY_3, KEY_4, KEY_5, KEY_7,
+    KEY_APOSTROPHE, KEY_9, KEY_0, KEY_8, KEY_EQUAL, KEY_COMMA,
+    KEY_MINUS, KEY_DOT, KEY_SLASH,
+    // 0x30..0x39  (0–9)
+    KEY_0, KEY_1, KEY_2, KEY_3, KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9,
+    // 0x3A..0x3F  (: ; < = > ?)
+    KEY_SEMICOLON, KEY_SEMICOLON, KEY_COMMA, KEY_EQUAL, KEY_DOT, KEY_SLASH,
+    // 0x40  (@)
+    KEY_2,
+    // 0x41..0x5A  (A–Z)
+    KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I, KEY_J,
+    KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R, KEY_S, KEY_T,
+    KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z,
+    // 0x5B..0x60  ([ \ ] ^ _ `)
+    KEY_LEFTBRACE, KEY_BACKSLASH, KEY_RIGHTBRACE, KEY_6, KEY_MINUS, KEY_GRAVE,
+    // 0x61..0x7A  (a–z)
+    KEY_A, KEY_B, KEY_C, KEY_D, KEY_E, KEY_F, KEY_G, KEY_H, KEY_I, KEY_J,
+    KEY_K, KEY_L, KEY_M, KEY_N, KEY_O, KEY_P, KEY_Q, KEY_R, KEY_S, KEY_T,
+    KEY_U, KEY_V, KEY_W, KEY_X, KEY_Y, KEY_Z,
+    // 0x7B..0x7E  ({ | } ~)
+    KEY_LEFTBRACE, KEY_BACKSLASH, KEY_RIGHTBRACE, KEY_GRAVE,
+};
+
+static const uint8_t _modTable[95] = {
+    // 0x20..0x2F
+    0,               // space
+    KEY_MOD_LSHIFT,  // !
+    KEY_MOD_LSHIFT,  // "
+    KEY_MOD_LSHIFT,  // #
+    KEY_MOD_LSHIFT,  // $
+    KEY_MOD_LSHIFT,  // %
+    KEY_MOD_LSHIFT,  // &
+    0,               // '
+    KEY_MOD_LSHIFT,  // (
+    KEY_MOD_LSHIFT,  // )
+    KEY_MOD_LSHIFT,  // *
+    KEY_MOD_LSHIFT,  // +
+    0,               // ,
+    0,               // -
+    0,               // .
+    0,               // /
+    // 0x30..0x39  (0–9, no shift)
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    // 0x3A..0x3F
+    KEY_MOD_LSHIFT,  // :
+    0,               // ;
+    KEY_MOD_LSHIFT,  // <
+    0,               // =
+    KEY_MOD_LSHIFT,  // >
+    KEY_MOD_LSHIFT,  // ?
+    // 0x40  (@)
+    KEY_MOD_LSHIFT,
+    // 0x41..0x5A  (A–Z, all shifted)
+    KEY_MOD_LSHIFT, KEY_MOD_LSHIFT, KEY_MOD_LSHIFT, KEY_MOD_LSHIFT,
+    KEY_MOD_LSHIFT, KEY_MOD_LSHIFT, KEY_MOD_LSHIFT, KEY_MOD_LSHIFT,
+    KEY_MOD_LSHIFT, KEY_MOD_LSHIFT, KEY_MOD_LSHIFT, KEY_MOD_LSHIFT,
+    KEY_MOD_LSHIFT, KEY_MOD_LSHIFT, KEY_MOD_LSHIFT, KEY_MOD_LSHIFT,
+    KEY_MOD_LSHIFT, KEY_MOD_LSHIFT, KEY_MOD_LSHIFT, KEY_MOD_LSHIFT,
+    KEY_MOD_LSHIFT, KEY_MOD_LSHIFT, KEY_MOD_LSHIFT, KEY_MOD_LSHIFT,
+    KEY_MOD_LSHIFT, KEY_MOD_LSHIFT,
+    // 0x5B..0x60
+    0,               // [
+    0,               // backslash
+    0,               // ]
+    KEY_MOD_LSHIFT,  // ^
+    KEY_MOD_LSHIFT,  // _
+    0,               // `
+    // 0x61..0x7A  (a–z, no shift)
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    // 0x7B..0x7E
+    KEY_MOD_LSHIFT,  // {
+    KEY_MOD_LSHIFT,  // |
+    KEY_MOD_LSHIFT,  // }
+    KEY_MOD_LSHIFT,  // ~
+};
+
+// ─── Internal Callback Implementations ──────────────────────────────────────
+
+void HijelHID_Internal::KBServerCallbacks::onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) {
+    _parent->_onConnect(connInfo.getConnHandle());
+}
+
+void HijelHID_Internal::KBServerCallbacks::onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) {
+    (void)reason;
+    _parent->_onDisconnect();
+}
+
+void HijelHID_Internal::KBServerCallbacks::onAuthenticationComplete(NimBLEConnInfo& connInfo) {
+    _parent->_onAuthComplete(connInfo.isEncrypted());
+}
+
+void HijelHID_Internal::KBServerCallbacks::onConfirmPassKey(NimBLEConnInfo& connInfo, uint32_t pass_key) {
+    // Numeric Comparison (DisplayYesNo + LESC). Auto-accept after printing the
+    // number to Serial / firing the onPassKey callback. The user confirms on
+    // the host side; rejecting here would silently drop the connection on macOS.
+    NimBLEDevice::injectConfirmPasskey(connInfo, true);
+    _parent->_onConfirmPassKey(pass_key);
+}
+
+// ─── LED Callback Implementation ─────────────────────────────────────────────
+
+void HijelHID_Internal::KBLEDCallbacks::onWrite(NimBLECharacteristic* pChar, NimBLEConnInfo& connInfo) {
+    std::string val = pChar->getValue();
+    if (val.length() >= 1) {
+        _parent->_onLEDWrite((uint8_t)val[0]);
+    }
+}
+
+// ─── Idle Timer Callback ──────────────────────────────────────────────────
+//
+// Runs in the FreeRTOS timer daemon task. Must not call NimBLE APIs directly.
+// Sets a flag that is checked and acted on from the Arduino loop task inside
+// press() / release() / releaseAll() — keeping NimBLE calls on the correct task
+// context and making this safe on both single-core and dual-core ESP32 variants.
+
+void HijelHID_BLEKeyboard::_idleTimerCallback(TimerHandle_t xTimer) {
+    HijelHID_BLEKeyboard* self =
+        static_cast<HijelHID_BLEKeyboard*>(pvTimerGetTimerID(xTimer));
+    if (self == nullptr) return;
+
+    self->_pendingIdleTransition = true;
+    self->_connState             = _ConnState::Idle;
+    // Mark that a priming zero-report is needed before the next real report.
+    // When the connection goes idle, Windows may suspend the HID device — the
+    // first notify() after resume is dropped as part of the wakeup handshake.
+    // Setting this flag here ensures _sendKeyReport() / _sendConsumerReport()
+    // will send a silent zero-report to absorb the drop before the real report.
+    self->_reportPrimingNeeded   = true;
+
+    // Serial.print() is safe from the FreeRTOS timer daemon task on ESP32 —
+    // it uses an internal UART mutex and does not touch the NimBLE stack.
+    // If Serial has not been initialised the bytes are silently dropped,
+    // consistent with all other logging in the library.
+    if (self->_logLevel >= HIDLogLevel::Normal) {
+        Serial.println("[HijelHID] Radio idle (slave latency applied, ~1.6Hz effective).");
+    }
+}
+
+// ─── Constructor ──────────────────────────────────────────────────────────
+//
+// deviceName   — stored as std::string. Truncated to HID_MAX_DEVICE_NAME_LEN
+//                if longer (hard BLE advertising packet limit). Null/empty
+//                falls back to "HijelHID KB".
+//
+// manufacturer — stored as std::string. Truncated to HID_MAX_MANUFACTURER_LEN
+//                (512 bytes) if longer (Bluetooth Core Spec GATT attribute
+//                maximum). Null/empty falls back to "Hijel".
+//
+// batteryLevel — clamped to 1–100. 0 is not a valid battery percentage.
+
+HijelHID_BLEKeyboard::HijelHID_BLEKeyboard(const char* deviceName,
+                                            const char* manufacturer,
+                                            uint8_t     batteryLevel)
+    : _batteryLevel(100),
+      _secMode(BLEKeyboardSecurity::JustWorks),
+      _tapDelay(HID_DEFAULT_TAP_DELAY_MS),
+      _keyGap(HID_DEFAULT_KEY_GAP_MS),
+      _logLevel(HIDLogLevel::Off),
+      _useRandomAddress(false),
+      _state(_BLEState::Stopped),
+      _connected(false),
+      _authenticated(false),
+      _ledState(0),
+      _consumerActive(false),
+      _reportPrimingNeeded(true),
+      _lastReportMs(0),
+      _txPowerLevel(8),
+      _afterWakeTimeoutMs(15000),
+      _nameTruncated(false),
+      _mfrTruncated(false),
+      _batClamped(false),
+      _connState(_ConnState::Disconnected),
+      _connHandle(BLE_HS_CONN_HANDLE_NONE),
+      _idleTimer(nullptr),
+      _pendingIdleTransition(false),
+      _cbPassKey(nullptr),
+      _cbPairingComplete(nullptr),
+      _cbLEDChange(nullptr),
+      _pServer(nullptr),
+      _pHID(nullptr),
+      _pKeyboardInput(nullptr),
+      _pKeyboardOutput(nullptr),
+      _pConsumerInput(nullptr),
+      _pMouseInput(nullptr),
+      _pServerCb(nullptr),
+      _pLEDCb(nullptr)
+{
+    memset(_keyReport, 0, sizeof(_keyReport));
+
+    // Device name — store in std::string, truncate if it exceeds the BLE
+    // advertising packet limit of 29 bytes.
+    _deviceName = (deviceName != nullptr && deviceName[0] != '\0')
+                  ? deviceName : "HijelHID KB";
+    if (_deviceName.length() > HID_MAX_DEVICE_NAME_LEN) {
+        _deviceName.resize(HID_MAX_DEVICE_NAME_LEN);
+        _nameTruncated = true;
+    }
+
+    // Manufacturer — store in std::string, truncate if it exceeds the Bluetooth
+    // Core Spec GATT attribute maximum of HID_MAX_MANUFACTURER_LEN (512 bytes).
+    _manufacturer = (manufacturer != nullptr && manufacturer[0] != '\0')
+                    ? manufacturer : "Hijel";
+    if (_manufacturer.length() > HID_MAX_MANUFACTURER_LEN) {
+        _manufacturer.resize(HID_MAX_MANUFACTURER_LEN);
+        _mfrTruncated = true;
+    }
+
+    // Battery level — clamp to valid range 1–100.
+    if (batteryLevel == 0) {
+        _batteryLevel = 1;
+        _batClamped   = true;
+    } else if (batteryLevel > 100) {
+        _batteryLevel = 100;
+        _batClamped   = true;
+    } else {
+        _batteryLevel = batteryLevel;
+    }
+}
+
+// ─── Debug Logging ────────────────────────────────────────────────────────
+
+void HijelHID_BLEKeyboard::setDebugLevel(HIDLogLevel level) {
+    _logLevel = level;
+}
+
+void HijelHID_BLEKeyboard::_logN(const char* msg) {
+    if (_logLevel >= HIDLogLevel::Normal) {
+        Serial.print("[HijelHID] ");
+        Serial.println(msg);
+    }
+}
+
+void HijelHID_BLEKeyboard::_logNf(const char* fmt, ...) {
+    if (_logLevel >= HIDLogLevel::Normal) {
+        char buf[256];
+        va_list args;
+        va_start(args, fmt);
+        vsnprintf(buf, sizeof(buf), fmt, args);
+        va_end(args);
+        Serial.print("[HijelHID] ");
+        Serial.println(buf);
+    }
+}
+
+void HijelHID_BLEKeyboard::_logV(const char* msg) {
+    if (_logLevel >= HIDLogLevel::Verbose) {
+        Serial.print("[HijelHID VERBOSE] ");
+        Serial.println(msg);
+    }
+}
+
+void HijelHID_BLEKeyboard::_logVf(const char* fmt, ...) {
+    if (_logLevel >= HIDLogLevel::Verbose) {
+        char buf[256];
+        va_list args;
+        va_start(args, fmt);
+        vsnprintf(buf, sizeof(buf), fmt, args);
+        va_end(args);
+        Serial.print("[HijelHID VERBOSE] ");
+        Serial.println(buf);
+    }
+}
+
+// ─── begin() ──────────────────────────────────────────────────────────────
+
+void HijelHID_BLEKeyboard::begin() {
+
+    // ── Guard: already running or permanently killed ──────────────────
+    if (_state == _BLEState::Running) {
+        _logN("begin() called while already running — ignored.");
+        return;
+    }
+    if (_state == _BLEState::Killed) {
+        _logN("ERROR: begin() called after kill() — BLE stack is permanently shut down.");
+        return;
+    }
+
+    // Print any deferred constructor warnings now that Serial is running
+    if (_nameTruncated) {
+        Serial.printf("[HijelHID] WARNING: Device name too long, truncated to %d chars: \"%s\"\n",
+                      HID_MAX_DEVICE_NAME_LEN, _deviceName.c_str());
+    }
+    if (_mfrTruncated) {
+        Serial.printf("[HijelHID] WARNING: Manufacturer string too long, truncated to %d chars.\n",
+                      HID_MAX_MANUFACTURER_LEN);
+    }
+    if (_batClamped) {
+        Serial.printf("[HijelHID] WARNING: Battery level out of range (1-100), clamped to %d%%.\n",
+                      _batteryLevel);
+    }
+
+    // ── Restart path: stack is already initialised (after end()) ──────
+    if (NimBLEDevice::isInitialized()) {
+        _logN("Restarting advertising (BLE stack already initialised)...");
+        // Re-apply random address on every restart. setOwnAddrType() must be
+        // called before startAdvertising() each time — it is not persisted by
+        // the NimBLE stack across end()/begin() cycles.
+        if (_useRandomAddress) {
+            NimBLEDevice::setOwnAddrType(BLE_OWN_ADDR_RANDOM);
+            _logN("Using random static BLE address.");
+        }
+        // Re-apply TX power — not persisted across end()/begin() cycles.
+        setTxPower(_txPowerLevel);
+        NimBLEDevice::startAdvertising();
+        _state = _BLEState::Running;
+        _logNf("Advertising as \"%s\". Tap delay: %dms, key gap: %dms.",
+               _deviceName.c_str(), _tapDelay, _keyGap);
+        return;
+    }
+
+    // ── First-time path: full BLE initialisation ──────────────────────
+    _logN("Initialising NimBLE stack...");
+    NimBLEDevice::init(_deviceName.c_str());
+
+    // Block until the NimBLE host task is fully ready.
+    // Required on ESP32 Arduino Core 3.3.7+ with NimBLE-Arduino 2.3.8+.
+    _logN("Waiting for NimBLE host sync...");
+    uint32_t t = millis();
+    while (!NimBLEDevice::isInitialized()) {
+        delay(10);
+        if (millis() - t > 5000) {
+            _logN("ERROR: NimBLE failed to initialise after 5s.");
+            return;
+        }
+    }
+    _logN("NimBLE stack ready.");
+
+    // Apply random address if requested — must be set after init() and
+    // before any advertising or security configuration.
+    if (_useRandomAddress) {
+        NimBLEDevice::setOwnAddrType(BLE_OWN_ADDR_RANDOM);
+        _logN("Using random static BLE address.");
+    }
+
+    // Apply TX power — must be set after init().
+    setTxPower(_txPowerLevel);
+
+    // Configure security
+    if (_secMode == BLEKeyboardSecurity::Passkey) {
+        _logN("Security: Passkey");
+        NimBLEDevice::setSecurityAuth(BLE_SM_PAIR_AUTHREQ_BOND |
+                                      BLE_SM_PAIR_AUTHREQ_MITM |
+                                      BLE_SM_PAIR_AUTHREQ_SC);
+        // DisplayYesNo triggers Numeric Comparison under LESC (BT Core Spec
+        // Vol 3 Part H Table 2.8). macOS negotiates this path regardless of
+        // whether we advertise DisplayOnly, so DisplayYesNo ensures both sides
+        // agree. The host shows a 6-digit number; we print the same number to
+        // Serial / fire onPassKey and auto-accept via onConfirmPassKey.
+        NimBLEDevice::setSecurityIOCap(BLE_HS_IO_DISPLAY_YESNO);
+        // Distribute LTK + IRK in Phase 3 — required by macOS; lenient on
+        // Windows and iOS but correct behaviour on all hosts.
+        NimBLEDevice::setSecurityInitKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
+        NimBLEDevice::setSecurityRespKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
+    } else {
+        _logN("Security: Just Works");
+        NimBLEDevice::setSecurityAuth(BLE_SM_PAIR_AUTHREQ_BOND |
+                                      BLE_SM_PAIR_AUTHREQ_SC);
+        NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT);
+        // Distribute LTK + IRK in Phase 3 — required by macOS, correct on all hosts.
+        NimBLEDevice::setSecurityInitKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
+        NimBLEDevice::setSecurityRespKey(BLE_SM_PAIR_KEY_DIST_ENC | BLE_SM_PAIR_KEY_DIST_ID);
+    }
+
+    // Create GATT server
+    _logN("Creating GATT server...");
+    _pServer = NimBLEDevice::createServer();
+    if (_pServerCb == nullptr) _pServerCb = new HijelHID_Internal::KBServerCallbacks(this);
+    _pServer->setCallbacks(_pServerCb);
+
+    // Create HID device and configure its metadata
+    _logN("Creating HID device...");
+    _pHID = new NimBLEHIDDevice(_pServer);
+    _pHID->setManufacturer(_manufacturer.c_str());
+    // PnP ID: source=Bluetooth SIG (0x01), VID=Espressif (0x02E5), PID=0x0001, version=0x0100
+    _pHID->setPnp(0x01, 0x02E5, 0x0001, 0x0100);
+    // HID info: country=0 (not localised), flags=0x01 (normally connectable)
+    _pHID->setHidInfo(0x00, 0x01);
+    _pHID->setReportMap((uint8_t*)_hidReportDescriptor, sizeof(_hidReportDescriptor));
+
+    // Retrieve report characteristics by Report ID
+    _logN("Getting report characteristics...");
+    _pKeyboardInput  = _pHID->getInputReport(HID_REPORT_ID_KEYBOARD);
+    _pKeyboardOutput = _pHID->getOutputReport(HID_REPORT_ID_KEYBOARD);
+    _pConsumerInput  = _pHID->getInputReport(HID_REPORT_ID_CONSUMER);
+    _pMouseInput     = _pHID->getInputReport(HID_REPORT_ID_MOUSE);
+
+    // Register LED output callback if the characteristic was created
+    if (_pKeyboardOutput != nullptr) {
+        if (_pLEDCb == nullptr) _pLEDCb = new HijelHID_Internal::KBLEDCallbacks(this);
+        _pKeyboardOutput->setCallbacks(_pLEDCb);
+    }
+
+    _pHID->setBatteryLevel(_batteryLevel);
+
+    _logN("Starting HID services...");
+    _pHID->startServices();
+
+    // Create the idle power management timer. One-shot (not auto-reload).
+    // pvTimerGetTimerID returns the 'this' pointer so the static callback
+    // can dispatch back to the correct instance without a global variable.
+    _idleTimer = xTimerCreate(
+        "KBIdle",
+        pdMS_TO_TICKS(HID_IDLE_THRESHOLD_MS),
+        pdFALSE,   // one-shot
+        this,
+        _idleTimerCallback
+    );
+    if (_idleTimer == nullptr) {
+        _logN("WARNING: Failed to create idle timer — idle power saving disabled.");
+    }
+
+    // Configure and start advertising
+    _logN("Configuring advertising...");
+    NimBLEAdvertising* pAdv = NimBLEDevice::getAdvertising();
+    pAdv->setAppearance(0x03C1);  // HID Keyboard appearance
+    pAdv->addServiceUUID(_pHID->getHidService()->getUUID());
+    pAdv->addServiceUUID(_pHID->getBatteryService()->getUUID());
+    pAdv->setPreferredParams(0x10, 0x20);  // 20ms min, 40ms max (Android 11 compatible)
+    pAdv->enableScanResponse(true);
+    pAdv->setMinInterval(0x20);
+    pAdv->setMaxInterval(0x40);
+
+    // Include device name in scan response so it appears correctly in
+    // Bluetooth settings on all hosts (particularly Android).
+    NimBLEAdvertisementData scanResponse;
+    scanResponse.setName(_deviceName.c_str());
+    pAdv->setScanResponseData(scanResponse);
+
+    NimBLEDevice::startAdvertising();
+    _state = _BLEState::Running;
+    _logNf("Advertising as \"%s\". Tap delay: %dms, key gap: %dms.",
+           _deviceName.c_str(), _tapDelay, _keyGap);
+}
+
+// ─── end() ────────────────────────────────────────────────────────────────
+
+void HijelHID_BLEKeyboard::end() {
+    if (_state != _BLEState::Running) return;
+    _logN("Stopping...");
+
+    // Stop the idle timer before disconnecting — prevents the timer callback
+    // from setting _pendingIdleTransition after the connection handle is cleared.
+    _stopIdleTimer();
+    _pendingIdleTransition = false;
+    _connState  = _ConnState::Disconnected;
+    _connHandle = BLE_HS_CONN_HANDLE_NONE;
+
+    // Set state BEFORE disconnecting so the onDisconnect callback
+    // (which checks _state) won't restart advertising.
+    _state = _BLEState::Stopped;
+
+    // Disconnect the current client if connected
+    if (_connected && _pServer != nullptr) {
+        // Disconnect all connected peers
+        auto peers = _pServer->getPeerDevices();
+        for (auto& handle : peers) {
+            _pServer->disconnect(handle);
+        }
+        // Give NimBLE time to complete the disconnect and fire callbacks
+        delay(150);
+    }
+
+    // Stop advertising so no new connections are accepted
+    NimBLEDevice::stopAdvertising();
+
+    // Reset internal state
+    _connected = false;
+    _authenticated = false;
+    memset(_keyReport, 0, sizeof(_keyReport));
+    _ledState = 0;
+    _consumerActive = false;
+    _reportPrimingNeeded = true;
+
+    _logN("Stopped. Call begin() to restart.");
+}
+
+// ─── kill() ──────────────────────────────────────────────────────────────
+
+void HijelHID_BLEKeyboard::kill() {
+    if (_state == _BLEState::Killed) return;
+
+    // If still running, stop cleanly first (disconnect + stop advertising)
+    if (_state == _BLEState::Running) {
+        end();
+    }
+
+    // Delete the idle timer now that the BLE stack is stopped.
+    // end() already called _stopIdleTimer(), but we delete here permanently.
+    if (_idleTimer != nullptr) {
+        xTimerDelete(_idleTimer, portMAX_DELAY);
+        _idleTimer = nullptr;
+    }
+
+    _logN("Killing BLE (permanent shutdown)...");
+
+    // Tear down the NimBLE stack and free all NimBLE-managed objects
+    // (server, services, characteristics, descriptors).
+    // end() has already disconnected and stopped advertising, so
+    // deinit will not fire onDisconnect callbacks.
+    NimBLEDevice::deinit(true);
+
+    // deinit(true) frees all BLE objects including memory regions that
+    // overlap with objects we allocated (_pHID, _pServerCb, _pLEDCb).
+    // Calling delete on these after deinit causes a double-free crash.
+    // Just null the pointers — the memory is already reclaimed.
+    _pHID       = nullptr;
+    _pServerCb  = nullptr;
+    _pLEDCb     = nullptr;
+
+    _pServer         = nullptr;
+    _pKeyboardInput  = nullptr;
+    _pKeyboardOutput = nullptr;
+    _pConsumerInput  = nullptr;
+    _pMouseInput     = nullptr;
+
+    _state = _BLEState::Killed;
+    _logN("BLE killed. begin() will be refused from this point.");
+
+    // NOTE: A small one-time memory leak remains after kill().
+    // This includes a known leak in the ESP-IDF NimBLE port's init/deinit
+    // path (Espressif issue #8136), plus our wrapper objects (_pHID,
+    // _pServerCb, _pLEDCb) which cannot be safely freed because deinit(true)
+    // corrupts the heap metadata around them.
+    // Since kill() sets _state to Killed and begin() is refused afterward,
+    // this leak is bounded and will not compound.
+}
+
+// ─── Connection State ─────────────────────────────────────────────────────
+
+bool HijelHID_BLEKeyboard::isConnected() const { return _connected; }
+bool HijelHID_BLEKeyboard::isPaired()    const { return _authenticated; }
+
+uint32_t HijelHID_BLEKeyboard::getIdleTime() const {
+    return millis() - _lastReportMs;
+}
+
+bool HijelHID_BLEKeyboard::isBonded() const {
+    if (_state == _BLEState::Killed) return false;
+    return (NimBLEDevice::getNumBonds() > 0);
+}
+
+void HijelHID_BLEKeyboard::clearBonds() {
+    if (_state == _BLEState::Killed) {
+        _logN("WARNING: clearBonds() called after kill() — ignored.");
+        return;
+    }
+    // Fix: iterate in reverse through all bonded peers and delete each one
+    // individually via deleteBond(), which routes through ble_gap_unpair()
+    // rather than ble_store_clear(). ble_gap_unpair() goes through the GAP
+    // layer and flushes the SM's in-memory state for each peer — which is
+    // what NimBLEDevice::deleteAllBonds() fails to do (it calls ble_store_clear()
+    // which wipes NVS bond records but leaves stale SM context, causing
+    // re-pairing to fail within the same boot cycle on iOS and other hosts).
+    // Iterating in reverse avoids index-shift issues that would occur if
+    // deleting forward (removing index 0 shifts all remaining entries down).
+    int numBonds = NimBLEDevice::getNumBonds();
+    _logNf("Clearing %d bond(s) individually via deleteBond().", numBonds);
+    for (int i = numBonds - 1; i >= 0; i--) {
+        NimBLEAddress addr = NimBLEDevice::getBondedAddress(i);
+        _logNf("  Deleting bond %d: %s", i, addr.toString().c_str());
+        NimBLEDevice::deleteBond(addr);
+    }
+}
+
+// ─── Security ─────────────────────────────────────────────────────────────
+
+void HijelHID_BLEKeyboard::setSecurityMode(BLEKeyboardSecurity mode) {
+    if (_state == _BLEState::Running) {
+        _logN("WARNING: setSecurityMode() called after begin() — will take effect on next begin() cycle.");
+    }
+    _secMode = mode;
+}
+
+void HijelHID_BLEKeyboard::setRandomAddress(bool enable) {
+    if (_state == _BLEState::Running) {
+        _logN("WARNING: setRandomAddress() called after begin() — will take effect on next begin() cycle.");
+    }
+    _useRandomAddress = enable;
+}
+
+void HijelHID_BLEKeyboard::onPassKey(void (*cb)(uint32_t passkey)) {
+    _cbPassKey = cb;
+}
+
+void HijelHID_BLEKeyboard::onPairingComplete(void (*cb)(bool success)) {
+    _cbPairingComplete = cb;
+}
+
+// ─── Timing ───────────────────────────────────────────────────────────────
+
+void HijelHID_BLEKeyboard::setTapDelay(uint16_t ms) { _tapDelay = ms; }
+void HijelHID_BLEKeyboard::setKeyGap(uint16_t ms)   { _keyGap   = ms; }
+
+// ─── Battery ──────────────────────────────────────────────────────────────
+
+void HijelHID_BLEKeyboard::setBatteryLevel(uint8_t level) {
+    if (_state == _BLEState::Killed) {
+        _logN("WARNING: setBatteryLevel() called after kill() — ignored.");
+        return;
+    }
+    if (level == 0) {
+        _logN("WARNING: Battery level 0 is invalid, clamping to 1.");
+        level = 1;
+    } else if (level > 100) {
+        _logNf("WARNING: Battery level %d out of range, clamping to 100.", level);
+        level = 100;
+    }
+    _batteryLevel = level;
+    if (_pHID != nullptr) {
+        _pHID->setBatteryLevel(level, true);
+        // Give the host a full connection interval to ACK the battery notification
+        // before any key reports follow. Without this gap, a key report fired
+        // immediately after the battery notify can lose the ACL buffer race.
+        if (_connected) delay(30);
+        _logNf("Battery level set to %d%%.", level);
+    }
+}
+
+// ─── TX Power ─────────────────────────────────────────────────────────────
+
+void HijelHID_BLEKeyboard::setTxPower(uint8_t level) {
+    if (_state == _BLEState::Killed) {
+        _logN("WARNING: setTxPower() called after kill() — ignored.");
+        return;
+    }
+    if (level < 1) {
+        _logN("WARNING: TX power level 0 is invalid (use end() to stop the radio), clamping to 1.");
+        level = 1;
+    } else if (level > 8) {
+        _logNf("WARNING: TX power level %d out of range (1-8), clamping to 8.", level);
+        level = 8;
+    }
+
+    // Map 1–8 onto the 8 discrete ESP32 TX power steps.
+    // Each step is 3 dBm apart, from -12 dBm (level 1) to +9 dBm (level 8).
+    static const esp_power_level_t pwrMap[8] = {
+        ESP_PWR_LVL_N12,  // 1 → -12 dBm
+        ESP_PWR_LVL_N9,   // 2 →  -9 dBm
+        ESP_PWR_LVL_N6,   // 3 →  -6 dBm
+        ESP_PWR_LVL_N3,   // 4 →  -3 dBm
+        ESP_PWR_LVL_N0,   // 5 →   0 dBm
+        ESP_PWR_LVL_P3,   // 6 →  +3 dBm
+        ESP_PWR_LVL_P6,   // 7 →  +6 dBm
+        ESP_PWR_LVL_P9,   // 8 →  +9 dBm (maximum)
+    };
+
+    esp_power_level_t pwrLevel = pwrMap[level - 1];
+    _txPowerLevel = level;  // always save — begin() re-applies after init if not yet running
+    if (NimBLEDevice::isInitialized()) {
+        NimBLEDevice::setPower(pwrLevel);
+        _logNf("TX power set to level %d (%d dBm).", level, ((int)pwrLevel * 3) - 12);
+    } else {
+        _logNf("TX power level %d stored — will be applied in begin().", level);
+    }
+}
+
+// ─── Idle Power Management — Internal Helpers ─────────────────────────────
+
+void HijelHID_BLEKeyboard::_updateConnParams(uint16_t minInterval, uint16_t maxInterval,
+                                              uint16_t latency, uint16_t timeout) {
+    // No-op if not connected — handle could be stale from a prior session.
+    if (_connHandle == BLE_HS_CONN_HANDLE_NONE) return;
+
+    // ble_gap_update_params() posts asynchronously to the NimBLE host task
+    // queue and returns immediately. On dual-core boards the NimBLE task
+    // processes it on Core 0 while Arduino continues on Core 1. On single-core
+    // boards, the NimBLE task gets CPU time at the next yield point (e.g. the
+    // delay() calls inside tap()). The host is not required to accept the
+    // request — acceptance is best-effort and host-controlled.
+    ble_gap_upd_params params;
+    params.itvl_min            = minInterval;
+    params.itvl_max            = maxInterval;
+    params.latency             = latency;
+    params.supervision_timeout = timeout;
+    params.min_ce_len          = BLE_GAP_INITIAL_CONN_MIN_CE_LEN;
+    params.max_ce_len          = BLE_GAP_INITIAL_CONN_MAX_CE_LEN;
+
+    int rc = ble_gap_update_params(_connHandle, &params);
+    if (rc != 0) {
+        _logNf("WARNING: ble_gap_update_params() failed (rc=%d) — host may not accept.", rc);
+    }
+}
+
+void HijelHID_BLEKeyboard::_transitionToActive() {
+    _connState             = _ConnState::Active;
+    _pendingIdleTransition = false;
+    _updateConnParams(HID_CONN_INTERVAL, HID_CONN_INTERVAL, 0, HID_CONN_TIMEOUT);
+    _logN("Radio awake (full rate restored).");
+    _startIdleTimer();
+}
+
+void HijelHID_BLEKeyboard::_startIdleTimer() {
+    if (_idleTimer == nullptr) return;
+    // xTimerReset starts the timer if stopped, or resets its period if running.
+    // Safe to call from the Arduino loop task.
+    xTimerReset(_idleTimer, 0);
+}
+
+void HijelHID_BLEKeyboard::_stopIdleTimer() {
+    if (_idleTimer == nullptr) return;
+    xTimerStop(_idleTimer, 0);
+}
+
+// ─── Keyboard Press / Release ────────────────────────────────────────────
+//
+// KEY_* constants are defined as (uint8_t) in BLEHIDKeys.h, so the compiler
+// always resolves keyboard key calls to the uint8_t overload unambiguously.
+
+void HijelHID_BLEKeyboard::press(uint8_t keycode, uint8_t modifiers) {
+    if (!_connected) return;
+
+    // Idle → Active transition: apply full-rate params on first keypress.
+    // _pendingIdleTransition is set by the FreeRTOS timer callback (timer daemon
+    // task) and cleared here on the Arduino loop task — no NimBLE calls from
+    // the timer context.
+    if (_pendingIdleTransition) {
+        _transitionToActive();
+    } else if (_connState == _ConnState::Active) {
+        _startIdleTimer();
+    }
+
+    if (_isModifier(keycode)) {
+        _keyReport[0] |= _keycodeToModBit(keycode);
+    } else {
+        _addKeycode(keycode);
+    }
+    _keyReport[0] |= modifiers;
+    _logVf("press(0x%02X, mod=0x%02X)", keycode, _keyReport[0]);
+    _sendKeyReport();
+}
+
+void HijelHID_BLEKeyboard::release(uint8_t keycode) {
+    if (!_connected) return;
+    if (keycode == KEY_NONE) { releaseAll(); return; }
+
+    if (_pendingIdleTransition) {
+        _transitionToActive();
+    } else if (_connState == _ConnState::Active) {
+        _startIdleTimer();
+    }
+
+    if (_isModifier(keycode)) {
+        _keyReport[0] &= ~_keycodeToModBit(keycode);
+    } else {
+        _removeKeycode(keycode);
+    }
+    _logVf("release(0x%02X)", keycode);
+    _sendKeyReport();
+}
+
+// ─── Consumer / Media Press / Release ────────────────────────────────────
+//
+// MEDIA_* constants are plain uint16_t values in BLEHIDMediaKeys.h, so the
+// compiler always resolves media key calls to the uint16_t overload.
+
+void HijelHID_BLEKeyboard::press(uint16_t usageId) {
+    if (!_connected) return;
+
+    if (_pendingIdleTransition) {
+        _transitionToActive();
+    } else if (_connState == _ConnState::Active) {
+        _startIdleTimer();
+    }
+
+    _logVf("press(consumer 0x%04X)", usageId);
+    _consumerActive = true;
+    _sendConsumerReport(usageId);
+}
+
+void HijelHID_BLEKeyboard::release(uint16_t usageId) {
+    (void)usageId;  // parameter kept for API symmetry; consumer release always sends 0x0000
+    if (!_connected) return;
+
+    if (_pendingIdleTransition) {
+        _transitionToActive();
+    } else if (_connState == _ConnState::Active) {
+        _startIdleTimer();
+    }
+
+    _logV("release(consumer)");
+    _consumerActive = false;
+    _sendConsumerReport(0x0000);
+}
+
+// ─── Release All ──────────────────────────────────────────────────────────
+
+void HijelHID_BLEKeyboard::releaseAll() {
+    if (!_connected) return;
+
+    if (_pendingIdleTransition) {
+        _transitionToActive();
+    } else if (_connState == _ConnState::Active) {
+        _startIdleTimer();
+    }
+
+    memset(_keyReport, 0, sizeof(_keyReport));
+    _logV("releaseAll()");
+    _sendKeyReport();
+    // Only send the consumer zero-report if a consumer key is actually held.
+    // Sending an unnecessary consumer notify after every keyboard tap adds a
+    // spurious notify() call that can interfere with the next keyboard report.
+    if (_consumerActive) {
+        _consumerActive = false;
+        _sendConsumerReport(0x0000);
+    }
+}
+
+// ─── Tap ──────────────────────────────────────────────────────────────────
+
+void HijelHID_BLEKeyboard::tap(uint8_t keycode, uint8_t modifiers,
+                                uint16_t delayMs, uint16_t keyGap) {
+    if (!_connected) return;
+    if (delayMs == 0) delayMs = _tapDelay;
+    if (keyGap  == 0) keyGap  = _keyGap;
+
+    // Save the modifier byte before press() merges in the tap's own modifiers.
+    // After releasing the key we restore this baseline so that externally held
+    // modifiers (e.g. a prior press(KEY_LSHIFT)) are preserved, while any
+    // modifiers added by this tap are cleaned up.
+    uint8_t savedMods = _keyReport[0];
+
+    press(keycode, modifiers);
+    delay(delayMs);
+
+    // Release only the keycode this tap pressed (not everything held)
+    if (_isModifier(keycode)) {
+        _keyReport[0] &= ~_keycodeToModBit(keycode);
+    } else {
+        _removeKeycode(keycode);
+    }
+
+    // Restore the modifier baseline — undoes the tap's `modifiers` parameter
+    // without affecting modifiers the caller is holding via press().
+    _keyReport[0] = savedMods;
+    _sendKeyReport();
+
+    delay(keyGap);
+}
+
+void HijelHID_BLEKeyboard::tap(uint16_t usageId,
+                                uint16_t delayMs, uint16_t keyGap) {
+    if (!_connected) return;
+    if (delayMs == 0) delayMs = _tapDelay;
+    if (keyGap  == 0) keyGap  = _keyGap;
+    press(usageId);
+    delay(delayMs);
+    release(usageId);
+    delay(keyGap);
+}
+
+// ─── Print::write() — ASCII → HID ────────────────────────────────────────
+
+size_t HijelHID_BLEKeyboard::write(uint8_t c) {
+    if (!_connected) return 0;
+
+    // Handle ASCII control characters explicitly
+    if (c == '\n' || c == '\r') { tap(KEY_RETURN);    return 1; }
+    if (c == '\t')               { tap(KEY_TAB);       return 1; }
+    if (c == 0x08)               { tap(KEY_BACKSPACE); return 1; }
+    if (c == 0x1B)               { tap(KEY_ESCAPE);    return 1; }
+
+    // Printable ASCII 0x20–0x7E — look up keycode and modifier from tables
+    if (c >= 0x20 && c <= 0x7E) {
+        uint8_t idx      = c - 0x20;
+        uint8_t keycode  = _kcTable[idx];
+        uint8_t modifier = _modTable[idx];
+        if (keycode != 0) {
+            _logVf("write('%c') -> keycode=0x%02X mod=0x%02X", c, keycode, modifier);
+            tap(keycode, modifier);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+size_t HijelHID_BLEKeyboard::write(const uint8_t* buffer, size_t size) {
+    if (!_connected || size == 0) return 0;
+    size_t written = 0;
+    for (size_t i = 0; i < size; i++) {
+        written += write(buffer[i]);
+    }
+    return written;
+}
+
+// ─── LED State ────────────────────────────────────────────────────────────
+
+bool HijelHID_BLEKeyboard::isNumLockOn()    const { return (_ledState & HID_LED_NUM_LOCK)    != 0; }
+bool HijelHID_BLEKeyboard::isCapsLockOn()   const { return (_ledState & HID_LED_CAPS_LOCK)   != 0; }
+bool HijelHID_BLEKeyboard::isScrollLockOn() const { return (_ledState & HID_LED_SCROLL_LOCK) != 0; }
+
+void HijelHID_BLEKeyboard::onLEDChange(void (*cb)(uint8_t leds)) {
+    _cbLEDChange = cb;
+}
+
+// ─── Sleep Hooks ──────────────────────────────────────────────────────────
+
+void HijelHID_BLEKeyboard::beforeSleep() {
+    // Stop and clear the idle timer before sleeping.
+    // millis() does not increment during light sleep — leaving the timer running
+    // would cause it to fire immediately on wakeup with a stale _connHandle,
+    // which could attempt a param update into an invalid connection state.
+    _stopIdleTimer();
+    _pendingIdleTransition = false;
+
+    // Release all keys so the host does not see keys stuck down across
+    // the sleep boundary. releaseAll() is a no-op if not connected, so
+    // this is safe to call regardless of connection state.
+    releaseAll();
+
+    // Ensure the first report after wakeup sends a priming zero-report.
+    // This is necessary because millis() does not increment during light
+    // sleep — without this flag the priming logic would never trigger
+    // after resume, causing the first real report to be dropped by Windows.
+    _reportPrimingNeeded = true;
+    _lastReportMs = 0;
+
+    _logN("beforeSleep() — idle timer stopped, keys released, priming flag set.");
+}
+
+void HijelHID_BLEKeyboard::afterWake() {
+    _logN("afterWake() — waiting for host...");
+
+    if (_afterWakeTimeoutMs == 0) {
+        _logN("afterWake() — timeout is 0, returning immediately.");
+        return;
+    }
+
+    // Use a single shared deadline across all wait steps so the total time
+    // spent in afterWake() never exceeds _afterWakeTimeoutMs regardless of
+    // how long each step takes.
+    uint32_t deadline = millis() + _afterWakeTimeoutMs;
+
+    // Step 1: Wait for _authenticated to go false.
+    // After light sleep, a fast bonded reconnect can fire onConnect() and
+    // onAuthenticationComplete() before the old connection's supervision
+    // timeout has been processed by NimBLE's Core 0 task. If we proceed
+    // while _authenticated is still true from the previous session we risk
+    // sending reports into a connection that is about to be torn down.
+    // We wait here until _authenticated goes false, confirming the old
+    // connection has been cleanly disconnected before we look for a new one.
+    if (_authenticated) {
+        _logN("afterWake() — waiting for disconnect...");
+        while (_authenticated && millis() < deadline) {
+            delay(10);
+        }
+        if (_authenticated) {
+            _logN("afterWake() — timed out waiting for disconnect.");
+            return;
+        }
+    }
+
+    // Step 2: Wait for _authenticated to go true.
+    // _onDisconnect() has cleared _authenticated and restarted advertising.
+    // We now wait for the host to reconnect and complete the LTK
+    // re-encryption handshake, which sets _authenticated = true via
+    // _onAuthComplete(). This is a more reliable "ready" signal than
+    // _connected alone, which fires at the raw GAP layer before the host
+    // HID stack has finished negotiation.
+    _logN("afterWake() — waiting for host to reconnect and authenticate...");
+    while (!_authenticated && millis() < deadline) {
+        delay(100);
+    }
+
+    if (!_authenticated) {
+        _logN("afterWake() — timed out waiting for authentication.");
+        return;
+    }
+
+    // Step 3: Authenticated — settle to allow the host to finish HID
+    // descriptor negotiation before the first report is sent.
+    _logN("afterWake() — authenticated, settling...");
+    delay(HID_AFTER_WAKE_SETTLE_MS);
+
+    // Step 4: Restart the idle timer now that the connection is ready.
+    _startIdleTimer();
+
+    // Treat reconnection as an activity event so getIdleTime() returns a
+    // meaningful value immediately after afterWake() returns, rather than
+    // reflecting the large elapsed time since the last pre-sleep report.
+    _lastReportMs = millis();
+
+    _logN("afterWake() — ready.");
+}
+
+void HijelHID_BLEKeyboard::_onConnect(uint16_t connHandle) {
+    _connected  = true;
+    _connHandle = connHandle;
+    _connState  = _ConnState::Connecting;
+    _logNf("Host connected (handle=0x%04X).", connHandle);
+}
+
+void HijelHID_BLEKeyboard::_onDisconnect() {
+    _stopIdleTimer();
+    _pendingIdleTransition = false;
+    _connState  = _ConnState::Disconnected;
+    _connHandle = BLE_HS_CONN_HANDLE_NONE;
+
+    _connected = false;
+    _authenticated = false;
+    memset(_keyReport, 0, sizeof(_keyReport));
+    _ledState = 0;
+    _consumerActive = false;
+    _reportPrimingNeeded = true;
+    _lastReportMs = 0;
+
+    if (_state == _BLEState::Running) {
+        _logN("Host disconnected. Restarting advertising...");
+        NimBLEDevice::startAdvertising();
+    } else {
+        _logN("Host disconnected.");
+    }
+}
+
+void HijelHID_BLEKeyboard::_onAuthComplete(bool success) {
+    if (success) {
+        _authenticated = true;
+        _connState     = _ConnState::Active;
+        _logN("Pairing complete (encrypted). Requesting full-rate connection params...");
+        // Request Active-state connection params: full rate, no latency.
+        // No param update was sent in _onConnect() to avoid a race condition
+        // where the host hasn't finished its own connection setup yet.
+        // The advertising preferred params (0x10–0x20) will have been applied
+        // by the host at connection time; we now explicitly request the
+        // Active rate to ensure consistency across all hosts.
+        _updateConnParams(HID_CONN_INTERVAL, HID_CONN_INTERVAL, 0, HID_CONN_TIMEOUT);
+        _startIdleTimer();
+    } else {
+        _authenticated = false;
+        _connState     = _ConnState::Connecting;  // remains connecting — did not reach Active
+        _logN("Pairing failed.");
+    }
+    if (_cbPairingComplete) _cbPairingComplete(success);
+}
+
+void HijelHID_BLEKeyboard::_onConfirmPassKey(uint32_t passkey) {
+    // Always fire the user callback if registered — Serial is their business.
+    // If no callback is registered, print via the normal log path so the
+    // number only appears when log level is Normal or Verbose, not Off.
+    if (_cbPassKey) {
+        _cbPassKey(passkey);
+    } else {
+        _logNf("Passkey: %06lu", (unsigned long)passkey);
+    }
+}
+
+void HijelHID_BLEKeyboard::_onLEDWrite(uint8_t ledByte) {
+    _ledState = ledByte;
+    _logVf("LED state: NumLock=%d CapsLock=%d ScrollLock=%d",
+           (ledByte & HID_LED_NUM_LOCK)    ? 1 : 0,
+           (ledByte & HID_LED_CAPS_LOCK)   ? 1 : 0,
+           (ledByte & HID_LED_SCROLL_LOCK) ? 1 : 0);
+    if (_cbLEDChange) _cbLEDChange(ledByte);
+}
+
+// ─── Internal Helpers ─────────────────────────────────────────────────────
+
+void HijelHID_BLEKeyboard::_sendKeyReport() {
+    if (_pKeyboardInput == nullptr || !_connected) return;
+    _logVf("keyReport: mod=0x%02X [0x%02X 0x%02X 0x%02X 0x%02X 0x%02X 0x%02X]",
+           _keyReport[0],
+           _keyReport[2], _keyReport[3], _keyReport[4],
+           _keyReport[5], _keyReport[6], _keyReport[7]);
+
+    // Windows selectively suspends idle BLE HID devices after ~800ms of
+    // inactivity at the application layer. When suspended, the first notify()
+    // triggers a wakeup — but Windows drops that first packet as part of the
+    // resume handshake. We guard against this in two ways:
+    //
+    // 1. _reportPrimingNeeded — set on construction, disconnect, and beforeSleep().
+    //    Catches the first report after connect or wake.
+    //
+    // 2. _lastReportMs — millis() timestamp of the last sent report. If no report
+    //    has been sent for HID_WINDOWS_PRIME_MS, prime regardless of the flag.
+    //    Catches mid-session suspend cycles (e.g. after a 2s delay between strings).
+    //
+    // In both cases: send a silent zero-report first to absorb the dropped packet,
+    // then send the real report. Skip if the real report is already all zeros.
+    bool needsPrime = _reportPrimingNeeded ||
+                      ((millis() - _lastReportMs) >= HID_WINDOWS_PRIME_MS);
+    if (needsPrime) {
+        bool reportEmpty = true;
+        for (int i = 0; i < HID_KEYBOARD_REPORT_SIZE; i++) {
+            if (_keyReport[i] != 0) { reportEmpty = false; break; }
+        }
+        if (!reportEmpty) {
+            uint8_t empty[HID_KEYBOARD_REPORT_SIZE] = {};
+            _pKeyboardInput->setValue(empty, HID_KEYBOARD_REPORT_SIZE);
+            _pKeyboardInput->notify();
+            delay(50);
+        }
+        _reportPrimingNeeded = false;
+    }
+
+    _pKeyboardInput->setValue(_keyReport, HID_KEYBOARD_REPORT_SIZE);
+    int retries = 0;
+    while (!_pKeyboardInput->notify() && _connected && retries++ < 20) {
+        vTaskDelay(1);
+    }
+    _lastReportMs = millis();
+}
+
+void HijelHID_BLEKeyboard::_sendConsumerReport(uint16_t usageId) {
+    if (_pConsumerInput == nullptr || !_connected) return;
+    uint8_t report[HID_CONSUMER_REPORT_SIZE];
+    report[0] = (uint8_t)(usageId & 0xFF);
+    report[1] = (uint8_t)(usageId >> 8);
+    _logVf("consumerReport: 0x%04X", usageId);
+
+    // Same Windows resume prime as _sendKeyReport(). Skip if this is already
+    // a zero release report — no point sending two identical empty reports.
+    bool needsPrime = _reportPrimingNeeded ||
+                      ((millis() - _lastReportMs) >= HID_WINDOWS_PRIME_MS);
+    if (needsPrime && usageId != 0x0000) {
+        uint8_t empty[HID_CONSUMER_REPORT_SIZE] = {};
+        _pConsumerInput->setValue(empty, HID_CONSUMER_REPORT_SIZE);
+        _pConsumerInput->notify();
+        delay(50);
+        _reportPrimingNeeded = false;
+    }
+
+    _pConsumerInput->setValue(report, HID_CONSUMER_REPORT_SIZE);
+    int retries = 0;
+    while (!_pConsumerInput->notify() && _connected && retries++ < 20) {
+        vTaskDelay(1);
+    }
+    _lastReportMs = millis();
+}
+
+// ─── Mouse Output (cypherbox fork) ───────────────────────────────────────
+void HijelHID_BLEKeyboard::mouseButtons(uint8_t buttons, int8_t dx, int8_t dy, int8_t wheel) {
+    if (_pMouseInput == nullptr || !_connected) return;
+    uint8_t report[HID_MOUSE_REPORT_SIZE] = {
+        (uint8_t)(buttons & 0x07), (uint8_t)dx, (uint8_t)dy, (uint8_t)wheel
+    };
+    _pMouseInput->setValue(report, HID_MOUSE_REPORT_SIZE);
+    int retries = 0;
+    while (!_pMouseInput->notify() && _connected && retries++ < 20) {
+        vTaskDelay(1);
+    }
+    _lastReportMs = millis();
+}
+
+void HijelHID_BLEKeyboard::mouseMove(int8_t dx, int8_t dy, int8_t wheel) {
+    mouseButtons(0, dx, dy, wheel);
+}
+
+void HijelHID_BLEKeyboard::mouseClick(uint8_t button) {
+    mouseButtons(button, 0, 0, 0);   // press
+    delay(15);
+    mouseButtons(0, 0, 0, 0);        // release
+}
+
+bool HijelHID_BLEKeyboard::_addKeycode(uint8_t keycode) {
+    // If already held, do nothing (prevents duplicate entries)
+    for (int i = 2; i < 8; i++) {
+        if (_keyReport[i] == keycode) return true;
+    }
+    // Find a free slot in the 6-key rollover array
+    for (int i = 2; i < 8; i++) {
+        if (_keyReport[i] == 0) {
+            _keyReport[i] = keycode;
+            return true;
+        }
+    }
+    _logV("WARNING: 6KRO limit reached, keycode dropped.");
+    return false;
+}
+
+bool HijelHID_BLEKeyboard::_removeKeycode(uint8_t keycode) {
+    for (int i = 2; i < 8; i++) {
+        if (_keyReport[i] == keycode) {
+            _keyReport[i] = 0;
+            return true;
+        }
+    }
+    return false;
+}
+
+bool HijelHID_BLEKeyboard::_isModifier(uint8_t keycode) {
+    return (keycode >= KEY_LCTRL && keycode <= KEY_RGUI);
+}
+
+uint8_t HijelHID_BLEKeyboard::_keycodeToModBit(uint8_t keycode) {
+    return (1 << (keycode - KEY_LCTRL));
+}

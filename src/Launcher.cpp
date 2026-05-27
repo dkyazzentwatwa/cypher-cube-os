@@ -459,6 +459,42 @@ bool eraseInstalled() {
   return true;
 }
 
+size_t roundUpToSector(size_t value) {
+  return ((value + FLASH_SECTOR_SIZE - 1) / FLASH_SECTOR_SIZE) * FLASH_SECTOR_SIZE;
+}
+
+bool eraseForImage(const AppEntry& app, const esp_partition_t* part, size_t fileSize,
+                   size_t eraseSize) {
+  size_t erased = 0;
+  uint8_t lastDrawPercent = 255;
+  uint32_t lastProgressDrawAt = 0;
+  while (erased < eraseSize) {
+    const size_t todo = min<size_t>(FLASH_ERASE_CHUNK, eraseSize - erased);
+    const uint8_t percent = static_cast<uint8_t>(min<size_t>(100, (erased * 100) / eraseSize));
+    const uint32_t now = millis();
+    if (lastDrawPercent == 255 || percent >= lastDrawPercent + 5 ||
+        now - lastProgressDrawAt >= 300) {
+      drawInstallProgress(app.name, "Erasing", erased, fileSize, percent, COLOR_WARN);
+      lastDrawPercent = percent;
+      lastProgressDrawAt = now;
+    }
+    Serial.printf("[install] erase %u/%u\n",
+                  static_cast<unsigned>(erased / 1024),
+                  static_cast<unsigned>(eraseSize / 1024));
+    esp_err_t err = esp_partition_erase_range(part, erased, todo);
+    if (err != ESP_OK) {
+      Serial.printf("[install] erase failed at 0x%X: %s\n",
+                    static_cast<unsigned>(erased), esp_err_to_name(err));
+      return false;
+    }
+    erased += todo;
+    yield();
+    delay(1);
+  }
+  drawInstallProgress(app.name, "Erasing", fileSize, fileSize, 100, COLOR_WARN);
+  return true;
+}
+
 bool installSelectedApp() {
   if (selectedApp >= appCount) return false;
   AppEntry& app = apps[selectedApp];
@@ -503,12 +539,13 @@ bool installSelectedApp() {
   }
 
   drawInstallProgress(app.name, "Preparing", 0, fileSize, 0, COLOR_ACCENT);
-  Serial.printf("[install] %s -> app1, %u bytes\n", app.binary, static_cast<unsigned>(fileSize));
-  drawInstallProgress(app.name, "Erasing", 0, fileSize, 0, COLOR_WARN);
-  esp_err_t err = esp_partition_erase_range(part, 0, part->size);
-  if (err != ESP_OK) {
+  const size_t eraseSize = roundUpToSector(fileSize);
+  Serial.printf("[install] %s -> app1, %u bytes, erase %u/%u bytes\n",
+                app.binary, static_cast<unsigned>(fileSize),
+                static_cast<unsigned>(eraseSize), static_cast<unsigned>(part->size));
+  if (!eraseForImage(app, part, fileSize, eraseSize)) {
     file.close();
-    showMessage("Erase Failed", esp_err_to_name(err));
+    showMessage("Erase Failed", "Flash erase failed. Check serial logs.");
     return false;
   }
 
@@ -526,7 +563,7 @@ bool installSelectedApp() {
   while (file.available()) {
     const size_t n = file.read(buffer, FLASH_CHUNK);
     if (n == 0) break;
-    err = esp_partition_write(part, offset, buffer, n);
+    esp_err_t err = esp_partition_write(part, offset, buffer, n);
     if (err != ESP_OK) {
       free(buffer);
       file.close();

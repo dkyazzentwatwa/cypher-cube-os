@@ -16,6 +16,7 @@ VERSION="0.1.0"
 RETURN_LIB="${ROOT}/libraries/WaveshareAmoledReturn"
 APPKIT_LIB="${ROOT}/libraries/WaveshareAmoledAppKit"
 PORTS_LIB="${ROOT}/libraries/WaveshareAmoledPorts"
+CYPHERBOX_LIB="${ROOT}/libraries/WaveshareCypherboxPort"
 
 ARDUINO_CLI="${ARDUINO_CLI:-$(command -v arduino-cli || true)}"
 if [[ -z "${ARDUINO_CLI}" && -x /opt/homebrew/bin/arduino-cli ]]; then
@@ -31,14 +32,11 @@ rm -rf "${DIST}" "${BUILD_ROOT}"
 mkdir -p "${DIST}" "${SOURCE_ROOT}" "${OUT_ROOT}"
 : > "${CATALOG_TSV}"
 
-if [[ -f "${ROOT}/tools/catalog/generate-gameos-ports.py" ]]; then
-  python3 "${ROOT}/tools/catalog/generate-gameos-ports.py" >/dev/null
-fi
-
 LIB_FLAGS=(
   --library "${RETURN_LIB}"
   --library "${APPKIT_LIB}"
   --library "${PORTS_LIB}"
+  --library "${CYPHERBOX_LIB}"
 )
 
 add_lib() {
@@ -64,6 +62,7 @@ add_lib "IRremote"
 add_lib "Adafruit_SSD1306"
 add_lib "Adafruit_PN532"
 add_lib "ESP8266_and_ESP32_OLED_driver_for_SSD1306_displays"
+add_lib "NimBLE-Arduino"
 
 json_record() {
   local name="$1"
@@ -299,32 +298,10 @@ build_sketch "Flock You" "flock-you" "${FLOCK_YOU_DIR}" "flock-you.bin" "ready" 
   "Direct Waveshare AMOLED profile build from sibling flock-you detector." \
   "-DESP32 -DBOARD_PROFILE=ESP32_WAVESHARE_AMOLED_18 -DCYPHER_OS_LAUNCHER_RETURN" 1
 
-build_local "Cardputer Games" "cardputer-games-lite" "cardputer-games-lite.bin" "lite" "true" \
-  "Touch arcade shelf with high scores, replayable modes, and SD score history."
-build_local "Cardputer Tarot" "cardputer-tarot-lite" "cardputer-tarot-lite.bin" "lite" "true" \
-  "Touch one-card and three-card Tarot draw with SD reading history."
-
-GAME_OS_APPS=(
-  "Cryptid Ranger|gameos-cryptid-park-ranger|Cryptid Ranger campaign with stats, lore, pack, quest log, and SD saves."
-  "Cyber Ranger|gameos-cyber-ranger|Cyber Ranger campaign with stats, lore, pack, quest log, and SD saves."
-  "Cyberdeck RPG|gameos-cyberdeck-hacker-rpg|Cyberdeck Hacker RPG campaign with stats, lore, pack, quest log, and SD saves."
-  "Dungeon Courier|gameos-dungeon-courier|Dungeon Courier campaign with stats, lore, pack, quest log, and SD saves."
-  "Guildmaster|gameos-guildmaster-pocket|Guildmaster Pocket campaign with stats, lore, pack, quest log, and SD saves."
-  "Haunted Radio|gameos-haunted-radio-operator|Haunted Radio Operator campaign with stats, lore, pack, quest log, and SD saves."
-  "Monster Ranch|gameos-monster-ranch-trail|Monster Ranch Trail campaign with stats, lore, pack, quest log, and SD saves."
-  "Pocket Detective|gameos-pocket-detective-agency|Pocket Detective Agency campaign with stats, lore, pack, quest log, and SD saves."
-  "Pocket Kingdom|gameos-pocket-kingdom-manager|Pocket Kingdom Manager campaign with stats, lore, pack, quest log, and SD saves."
-  "Signal Rat|gameos-signal-rat-cyberdeck-rpg|Signal Rat Cyberdeck RPG campaign with stats, lore, pack, quest log, and SD saves."
-  "Star Trader|gameos-star-trader-pocket-frontier|Star Trader Pocket Frontier campaign with stats, lore, pack, quest log, and SD saves."
-  "Star Trail|gameos-star-trail-rancher|Star Trail Rancher campaign with stats, lore, pack, quest log, and SD saves."
-  "Tiny Wasteland|gameos-tiny-wasteland|Tiny Wasteland campaign with stats, lore, pack, quest log, and SD saves."
-  "Wasteland Guild|gameos-wasteland-guildmaster|Wasteland Guildmaster campaign with stats, lore, pack, quest log, and SD saves."
-)
-
-for entry in "${GAME_OS_APPS[@]}"; do
-  IFS="|" read -r name slug notes <<< "${entry}"
-  build_local "${name}" "${slug}" "${slug}.bin" "campaign_lite" "true" "${notes}"
-done
+build_local "Cypherbox WiFi Tools" "cypherbox-wifi-tools" "cypherbox-wifi-tools.bin" "cypherbox_port" "true" \
+  "Touch and USB serial WiFi lab tools: scan, heatmap, captive portal, attacks, and read-only SD web server."
+build_local "Cypherbox BLE Tools" "cypherbox-ble-tools" "cypherbox-ble-tools.bin" "cypherbox_port" "true" \
+  "Touch, USB serial, and BLE Serial tools: BLE scan, spam, HID payloads, mouse jiggler, pairing, and SD file listing."
 
 python3 - "${CATALOG_TSV}" "${DIST}/apps.json" <<'PY'
 import csv
