@@ -1,198 +1,82 @@
 # Cypher Cube
 
-**A local-first SD app launcher for the Cypher Cube, built on the Waveshare
-ESP32-S3-Touch-AMOLED-1.8.**
+Cypher Cube is a pocket-sized touchscreen launcher for local ESP32 apps. Flash
+the launcher once, copy app binaries to a microSD card, then tap the app you
+want to run.
 
-This is the Cypher Cube version of the tiny-OS idea: flash a launcher once, copy
-app `.bin` files to a FAT32 SD card, tap an app in the catalog, and the
-launcher installs that app into the app partition before rebooting.
+It is built for the Waveshare ESP32-S3-Touch-AMOLED-1.8, but the experience is
+branded around the Cypher Cube: a small, local-first device for WiFi/BLE tools,
+utilities, diagnostics, and experiments you can actually carry around.
 
-ESP32 apps do not execute directly from SD. The launcher lives in `ota_0`, SD
-app binaries live under `/waveshare-os/apps`, and the selected sketch `.bin` is
-copied into `ota_1`.
+## What It Does
 
-## Cypher Cube Hardware
+- Touchscreen app launcher with SD-card app installs.
+- One-tap app switching without reflashing from your computer each time.
+- USB serial fallback shell for status, app listing, install, erase, and boot
+  commands.
+- BOOT button shortcuts for back, home, and force-launcher recovery.
+- Shared onboard hardware support for battery, clock, motion, WiFi, BLE, SD,
+  display, touch, and audio.
 
-- Waveshare ESP32-S3-Touch-AMOLED-1.8
+## Included Apps
+
+The current Cypher Cube catalog includes:
+
+- **Pomodoro** - Focus timer with battery and time display.
+- **Tricorder** - One-screen dashboard for battery, clock, IMU, and nearby WiFi.
+- **Cypher Cube WiFi Tools** - WiFi scan, channel heatmap, captive portal, active
+  WiFi lab tools, read-only SD web server, and serial commands.
+- **Cypher Cube BLE Tools** - BLE Serial, BLE scan/export, BLE advertising lab
+  tools, HID payload launcher, mouse jiggler, pairing tools, and serial commands.
+- **Cypher Drive** - Direct AMOLED build from the Cypher Drive project.
+- **Cypher Chat** - Direct AMOLED build from the Cypher Chat project.
+- **Flock You** - Direct AMOLED build from the Flock You project.
+- **SD Status** - SD card and catalog path diagnostic.
+- **Touch Diagnostics** - Touchscreen and display sanity check.
+
+Per-app notes live in [docs/apps](docs/apps/README.md).
+
+## Device Hardware
+
+Cypher Cube currently targets:
+
 - ESP32-S3R8 with 8 MB PSRAM and 16 MB flash
-- SH8601 QSPI AMOLED, 368x448
+- 368x448 SH8601 QSPI AMOLED display
 - FT3168 capacitive touch
-- SD_MMC card slot
+- microSD card slot over SD_MMC
 - BOOT button fallback input
-- AXP2101 PMU (battery), PCF85063 RTC, QMI8658 6-axis IMU, ES8311 mic+speaker —
-  exposed through the shared `WaveshareAmoledSensors` HAL
+- AXP2101 battery/PMU
+- PCF85063 real-time clock
+- QMI8658 6-axis IMU
+- ES8311 mic and speaker path
+- WiFi, BLE, and USB serial
 
-Waveshare documents the board, Arduino examples, SH8601 display, FT3168 touch,
-and SD demo flow here:
+More hardware notes are in [docs/hardware.md](docs/hardware.md).
 
-- https://docs.waveshare.com/ESP32-S3-Touch-AMOLED-1.8
-- https://docs.waveshare.com/ESP32-S3-Touch-AMOLED-1.8/Development-Environment-Setup-Arduino
-- https://github.com/waveshareteam/ESP32-S3-Touch-AMOLED-1.8
+## Build It
 
-## Install Dependencies
-
-Install Arduino CLI and the ESP32 core, then install the regular libraries:
-
-```bash
-arduino-cli core update-index
-arduino-cli core install esp32:esp32
-arduino-cli lib install "ArduinoJson"
-arduino-cli lib install "GFX Library for Arduino"
-arduino-cli lib install "Adafruit XCA9554"
-arduino-cli lib install "Adafruit BusIO"
-arduino-cli lib install "NimBLE-Arduino"
-arduino-cli lib install "XPowersLib"
-arduino-cli lib install "SensorLib"
-```
-
-`XPowersLib` (AXP2101 battery) and `SensorLib` (PCF85063 RTC + QMI8658 IMU) back
-the shared `WaveshareAmoledSensors` HAL used by the launcher and the onboard
-sensor apps. ES8311 audio uses the in-core `ESP_I2S` library, so no extra
-install is needed.
-
-Install Waveshare's offline `Arduino_DriveBus` library from the official sample
-package. It should appear in `arduino-cli lib list` as the FT3168 drive bus
-library.
-
-## Build And Flash Launcher
-
-Compile with the repo helper. It passes the local Waveshare display/touch
-library folders explicitly:
+This repo is Arduino CLI only. The short version:
 
 ```bash
 ./tools/build-launcher.sh
-```
-
-The profile is also recorded in `sketch.yaml`. If your Arduino CLI config
-already searches `~/Documents/Arduino/libraries`, this may work directly:
-
-```bash
-arduino-cli compile --profile waveshare .
-```
-
-Flash:
-
-```bash
-arduino-cli board list
+./tools/build-apps.sh
+./tools/package-sd.sh
 ./tools/flash-launcher.sh /dev/cu.usbmodemXXXX
 ```
 
-The flash helper touches the current port at 1200 baud, waits for the ESP32-S3
-to re-enumerate, then uploads with the `waveshare` profile.
+Full setup, dependency, flashing, SD-card, and app-porting instructions are in
+[docs/technical-instructions.md](docs/technical-instructions.md).
 
-## Build And Package SD Apps
+## Safety And Scope
 
-Build the real catalog:
+Some included WiFi and BLE apps are security lab tools. Use them only on
+networks, devices, radios, and hosts you own or have explicit permission to test.
 
-```bash
-./tools/build-apps.sh
-./tools/package-sd.sh
-```
+NFC, APDU Lab, tag emulation, GPS, and wardriver features are intentionally not
+included in the current Cypher Cube catalog because they require external
+PN532/GPS hardware. Legacy Cardputer Lite and GameOS folders may exist in the
+repo, but they are not part of the supported catalog.
 
-Copy the contents of `dist/sd-card` to the root of a FAT32 SD card.
-
-Expected layout:
-
-```text
-/waveshare-os/apps/apps.json
-/waveshare-os/apps/pomodoro.bin
-/waveshare-os/apps/cypher-chat.bin
-/waveshare-os/apps/cypher-drive.bin
-/waveshare-os/apps/flock-you.bin
-/waveshare-os/apps/cypherbox-wifi-tools.bin
-/waveshare-os/apps/cypherbox-ble-tools.bin
-/waveshare-os/apps/tricorder.bin
-/waveshare-os/apps/sd-status.bin
-/waveshare-os/apps/touch-diagnostics.bin
-/waveshare-os/cypherbox/COUNTER.TXT
-/waveshare-os/cypherbox/logs/
-/waveshare-os/cypherbox/payloads/macos/hello.duck
-```
-
-The generated manifest currently ships onboard-hardware apps (`pomodoro` and
-`tricorder`) built on the shared `WaveshareAmoledSensors` HAL, two local Cypher
-Cube diagnostics (`sd-status`, `touch-diagnostics`), direct AMOLED profile
-builds for `cypher-drive`, `cypher-chat`, and `flock-you`, plus two grouped
-Cypherbox Mini-derived wireless ports for the Cypher Cube. Catalog order puts
-featured apps first and the diagnostic utilities last:
-
-- `cypherbox-wifi-tools`: WiFi scan, heatmap, captive portal, active WiFi lab
-  attacks, read-only SD web server, and USB serial commands.
-- `cypherbox-ble-tools`: BLE Serial, BLE scan/export, BLE advertising spam,
-  BLE HID DuckyScript payloads, mouse jiggler, pairing tools, and USB serial
-  commands.
-
-NFC, APDU Lab, tag emulation, GPS, and wardriver are intentionally not included
-in this Cypher Cube catalog pass because they require external PN532/GPS hardware.
-Legacy Cardputer Lite and GameOS source folders may remain in the repo, but they
-are not built, packaged, or advertised by `tools/build-apps.sh`.
-
-The Cypher Cube wireless ports include active lab tools. Use them only on radios,
-networks, devices, and hosts you own or have explicit permission to test.
-
-Sibling repo discovery defaults to repos beside this checkout. Override as
-needed:
-
-```bash
-WAVESHARE_OS_WORKSPACE_ROOT=/path/to/repos ./tools/build-apps.sh
-WAVESHARE_OS_CYPHER_DRIVE_DIR=/path/to/cypher-drive ./tools/build-apps.sh
-WAVESHARE_OS_CYPHER_CHAT_DIR=/path/to/cypher-chat ./tools/build-apps.sh
-WAVESHARE_OS_FLOCK_YOU_DIR=/path/to/flock-you ./tools/build-apps.sh
-```
-
-Per-app operating docs live in [`docs/apps`](docs/apps).
-
-## Controls
-
-- Touch app rows and buttons to navigate.
-- Short BOOT press: back.
-- Long BOOT press: home.
-- Hold BOOT during launcher startup: force launcher and disable auto-boot app.
-- Serial fallback is available at `115200` baud.
-
-Serial commands:
-
-```text
-help
-status
-apps
-reload
-launch
-erase
-install <slug>
-boot launcher
-boot app
-```
-
-## App Contract
-
-Apps must be compiled for the same Waveshare AMOLED target and partition layout.
-Package sketch app `.bin` files only, not merged flash images. Apps that support
-return can include:
-
-```cpp
-#include <WaveshareAmoledReturn.h>
-
-WaveshareAmoledOs::returnToLauncher();
-```
-
-The helper sets the one-shot launcher return flag, points boot back to `ota_0`,
-and restarts.
-
-Cardputer-derived apps can also include the compatibility alias:
-
-```cpp
-#include <CypherPuterReturn.h>
-
-cypherPuterReturnToLauncher();
-```
-
-New local ports should use `WaveshareAmoledAppKit`, which standardizes SH8601
-display init, FT3168 touch, SD_MMC, BOOT short/back, BOOT long/home, serial
-fallback, and launcher return.
-
-## Scope
-
-This repo is intentionally single-target and local-first. Do not add PlatformIO,
-ESP-IDF project files, online catalogs, WebUI, USB mass storage, or multi-board
-support unless the project scope changes.
+This project is intentionally single-target and local-first: no PlatformIO,
+ESP-IDF project files, online OTA catalogs, USB mass storage flow, WebUI, or
+multi-board support unless the scope changes.
