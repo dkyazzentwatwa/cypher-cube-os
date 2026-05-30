@@ -1,13 +1,13 @@
-# Waveshare Catalog Apps
+# Cypher Cube Catalog Apps
 
 This folder documents each app that `./tools/build-apps.sh` writes into
 `dist/apps/apps.json`.
 
 Status meanings:
 
-- `ready`: direct Waveshare AMOLED build or full local diagnostic app.
-- `cypherbox_port`: grouped Cypherbox Mini-derived wireless app for built-in
-  Waveshare hardware, WiFi/BLE radio, touch, SD, and serial.
+- `ready`: direct Cypher Cube build or full local diagnostic app.
+- `cypherbox_port`: grouped Cypherbox Mini-derived wireless app adapted for
+  Cypher Cube hardware, WiFi/BLE radio, touch, SD, and serial.
 - `build_failed`: source was discovered but did not compile; not installable.
 
 All installable app binaries are sketch `.bin` files intended for the launcher's

@@ -1,10 +1,10 @@
-# Cypherbox BLE Tools
+# Cypher Cube BLE Tools
 
 Status: `cypherbox_port`
 
-Touch-native Waveshare port of the Cypherbox Mini BLE tool family. This app uses
-the built-in ESP32-S3 BLE radio, touch screen, SD card, BOOT button, USB serial,
-and an optional Nordic UART BLE Serial shell.
+Touch-native Cypher Cube port of the Cypherbox Mini BLE tool family. This app
+uses the built-in ESP32-S3 BLE radio, touch screen, SD card, BOOT button, USB
+serial, and an optional Nordic UART BLE Serial shell.
 
 ## Features
 
@@ -15,13 +15,13 @@ and an optional Nordic UART BLE Serial shell.
 - BT HID DuckyScript launcher from `/waveshare-os/cypherbox/payloads`.
 - Standalone BLE mouse jiggler.
 - HID pairing/bond management.
-- Cypherbox SD file listing under `/waveshare-os/cypherbox`.
+- Shared SD file listing under `/waveshare-os/cypherbox`.
 
 ## Controls
 
 - Tap menu rows to run tools.
 - Swipe up/down or left/right to browse vectors, devices, and payloads.
-- Long press in BLE scan saves `ble_NNN.csv` to the Cypherbox logs folder.
+- Long press in BLE scan saves `ble_NNN.csv` to the shared logs folder.
 - BOOT exits foreground tools.
 - Hold BOOT returns to the launcher.
 

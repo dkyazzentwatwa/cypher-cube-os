@@ -2,9 +2,9 @@
 
 Status: `ready`
 
-Source route: local Waveshare diagnostic sketch.
+Source route: local Cypher Cube diagnostic sketch.
 
-## Waveshare Controls
+## Cypher Cube Controls
 
 - Tap or press BOOT to return to the launcher.
 - Read card type, size, and catalog path status on screen.

@@ -2,9 +2,9 @@
 
 Status: `ready`
 
-Source route: direct Waveshare AMOLED profile build from sibling `flock-you`.
+Source route: direct Cypher Cube AMOLED profile build from sibling `flock-you`.
 
-## Waveshare Controls
+## Cypher Cube Controls
 
 - Touch and BOOT behavior follow the upstream AMOLED profile.
 - Swipe pages and use the on-screen detector UI.

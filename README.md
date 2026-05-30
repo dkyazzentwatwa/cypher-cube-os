@@ -1,16 +1,17 @@
-# Waveshare AMOLED OS
+# Cypher Cube
 
-**A local-first SD app launcher for the Waveshare ESP32-S3-Touch-AMOLED-1.8.**
+**A local-first SD app launcher for the Cypher Cube, built on the Waveshare
+ESP32-S3-Touch-AMOLED-1.8.**
 
-This is the Waveshare AMOLED version of the tiny-OS idea: flash a launcher once,
-copy app `.bin` files to a FAT32 SD card, tap an app in the catalog, and the
+This is the Cypher Cube version of the tiny-OS idea: flash a launcher once, copy
+app `.bin` files to a FAT32 SD card, tap an app in the catalog, and the
 launcher installs that app into the app partition before rebooting.
 
 ESP32 apps do not execute directly from SD. The launcher lives in `ota_0`, SD
 app binaries live under `/waveshare-os/apps`, and the selected sketch `.bin` is
 copied into `ota_1`.
 
-## Hardware Target
+## Cypher Cube Hardware
 
 - Waveshare ESP32-S3-Touch-AMOLED-1.8
 - ESP32-S3R8 with 8 MB PSRAM and 16 MB flash
@@ -18,6 +19,8 @@ copied into `ota_1`.
 - FT3168 capacitive touch
 - SD_MMC card slot
 - BOOT button fallback input
+- AXP2101 PMU (battery), PCF85063 RTC, QMI8658 6-axis IMU, ES8311 mic+speaker —
+  exposed through the shared `WaveshareAmoledSensors` HAL
 
 Waveshare documents the board, Arduino examples, SH8601 display, FT3168 touch,
 and SD demo flow here:
@@ -38,7 +41,14 @@ arduino-cli lib install "GFX Library for Arduino"
 arduino-cli lib install "Adafruit XCA9554"
 arduino-cli lib install "Adafruit BusIO"
 arduino-cli lib install "NimBLE-Arduino"
+arduino-cli lib install "XPowersLib"
+arduino-cli lib install "SensorLib"
 ```
+
+`XPowersLib` (AXP2101 battery) and `SensorLib` (PCF85063 RTC + QMI8658 IMU) back
+the shared `WaveshareAmoledSensors` HAL used by the launcher and the onboard
+sensor apps. ES8311 audio uses the in-core `ESP_I2S` library, so no extra
+install is needed.
 
 Install Waveshare's offline `Arduino_DriveBus` library from the official sample
 package. It should appear in `arduino-cli lib list` as the FT3168 drive bus
@@ -85,21 +95,26 @@ Expected layout:
 
 ```text
 /waveshare-os/apps/apps.json
-/waveshare-os/apps/touch-diagnostics.bin
-/waveshare-os/apps/sd-status.bin
-/waveshare-os/apps/cypher-drive.bin
+/waveshare-os/apps/pomodoro.bin
 /waveshare-os/apps/cypher-chat.bin
+/waveshare-os/apps/cypher-drive.bin
 /waveshare-os/apps/flock-you.bin
 /waveshare-os/apps/cypherbox-wifi-tools.bin
 /waveshare-os/apps/cypherbox-ble-tools.bin
+/waveshare-os/apps/tricorder.bin
+/waveshare-os/apps/sd-status.bin
+/waveshare-os/apps/touch-diagnostics.bin
 /waveshare-os/cypherbox/COUNTER.TXT
 /waveshare-os/cypherbox/logs/
 /waveshare-os/cypherbox/payloads/macos/hello.duck
 ```
 
-The generated manifest currently ships the two local Waveshare diagnostics,
-direct AMOLED profile builds for `cypher-drive`, `cypher-chat`, and `flock-you`,
-plus two grouped Cypherbox Mini-derived wireless ports:
+The generated manifest currently ships onboard-hardware apps (`pomodoro` and
+`tricorder`) built on the shared `WaveshareAmoledSensors` HAL, two local Cypher
+Cube diagnostics (`sd-status`, `touch-diagnostics`), direct AMOLED profile
+builds for `cypher-drive`, `cypher-chat`, and `flock-you`, plus two grouped
+Cypherbox Mini-derived wireless ports for the Cypher Cube. Catalog order puts
+featured apps first and the diagnostic utilities last:
 
 - `cypherbox-wifi-tools`: WiFi scan, heatmap, captive portal, active WiFi lab
   attacks, read-only SD web server, and USB serial commands.
@@ -108,11 +123,11 @@ plus two grouped Cypherbox Mini-derived wireless ports:
   commands.
 
 NFC, APDU Lab, tag emulation, GPS, and wardriver are intentionally not included
-in this Waveshare catalog pass because they require external PN532/GPS hardware.
+in this Cypher Cube catalog pass because they require external PN532/GPS hardware.
 Legacy Cardputer Lite and GameOS source folders may remain in the repo, but they
 are not built, packaged, or advertised by `tools/build-apps.sh`.
 
-The Cypherbox wireless ports include active lab tools. Use them only on radios,
+The Cypher Cube wireless ports include active lab tools. Use them only on radios,
 networks, devices, and hosts you own or have explicit permission to test.
 
 Sibling repo discovery defaults to repos beside this checkout. Override as

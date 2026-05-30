@@ -8,9 +8,14 @@
 #include <esp_partition.h>
 #include <esp_system.h>
 
+#include <WaveshareAmoledSensors.h>
+
 #include "BoardConfig.h"
 #include "DisplayPort.h"
+#include "SerialShell.h"
 #include "TouchInput.h"
+
+namespace WSensors = WaveshareAmoled::Sensors;
 
 namespace {
 struct AppEntry {
@@ -27,6 +32,8 @@ enum ScreenMode {
   SCREEN_HOME,
   SCREEN_APPS,
   SCREEN_SETTINGS,
+  SCREEN_SET_TIME,
+  SCREEN_PICK_BOOT_APP,
   SCREEN_INFO,
   SCREEN_CONFIRM_INSTALL,
   SCREEN_MESSAGE
@@ -43,6 +50,7 @@ TouchInput touch;
 Preferences prefs;
 AppEntry apps[MAX_APPS];
 uint8_t appCount = 0;
+uint8_t selectedHome = 0;
 uint8_t selectedApp = 0;
 uint8_t appScroll = 0;
 ScreenMode screenMode = SCREEN_HOME;
@@ -52,13 +60,51 @@ bool bootToApp = false;
 bool touchWasDown = false;
 uint8_t brightness = AMOLED_BRIGHTNESS;
 char lastInstalled[40] = "";
+char lastSlug[32] = "";
+uint32_t lastSize = 0;
 char statusLine[96] = "";
 char messageTitle[40] = "";
 char messageBody[180] = "";
-char serialLine[96] = "";
+char serialLine[160] = "";
 uint8_t serialLineLen = 0;
 bool bootWasDown = false;
 uint32_t bootDownAt = 0;
+
+// Screen timeout / sleep.
+uint16_t screenTimeoutSec = 60;  // 0 = never
+uint32_t lastActivityAt = 0;
+bool screenAsleep = false;
+bool swallowBootRelease = false;
+
+// Default auto-boot app (slug). Empty = boot whatever is installed.
+char defaultBootSlug[32] = "";
+
+// Motion gestures (flip-to-sleep, shake-to-home).
+bool imuGesturesOn = false;
+
+// Working copy while editing the clock on SCREEN_SET_TIME.
+WSensors::DateTime editTime;
+uint8_t timeField = 0;  // 0=Y 1=M 2=D 3=H 4=Min
+
+// Forward declarations for functions referenced before their definition.
+void redraw();
+bool installSelectedApp(bool force);
+void noteActivity();
+bool relaunchMatchesInstalled();
+void goHome();
+
+constexpr uint8_t INTRO_RAIN_COLS = 28;
+constexpr uint16_t INTRO_BG = 0x0000;
+constexpr uint16_t INTRO_PLATE = 0x0021;
+constexpr uint16_t INTRO_PLATE_EDGE = 0x05FF;
+constexpr uint16_t INTRO_MATRIX_DIM = 0x0320;
+constexpr uint16_t INTRO_MATRIX_MID = 0x07E0;
+constexpr uint16_t INTRO_MATRIX_HEAD = 0x87FF;
+constexpr uint16_t INTRO_SCAN = 0xFFE0;
+
+int16_t introRainY[INTRO_RAIN_COLS];
+uint8_t introRainSpeed[INTRO_RAIN_COLS];
+bool introRainReady = false;
 
 void copyField(char* dest, size_t destSize, const char* source) {
   if (destSize == 0) return;
@@ -128,12 +174,23 @@ void loadPrefs() {
   }
   String installed = prefs.getString("lastApp", "");
   copyField(lastInstalled, sizeof(lastInstalled), installed.c_str());
+  copyField(lastSlug, sizeof(lastSlug), prefs.getString("lastSlug", "").c_str());
+  lastSize = prefs.getULong("lastSize", 0);
+  screenTimeoutSec = prefs.getUShort("scrnTo", 60);
+  copyField(defaultBootSlug, sizeof(defaultBootSlug),
+            prefs.getString("bootSlug", "").c_str());
+  imuGesturesOn = prefs.getBool("imuGest", false);
 }
 
 void savePrefs() {
   prefs.putUChar("bright", brightness);
   prefs.putBool("bootToApp", bootToApp);
   prefs.putString("lastApp", lastInstalled);
+  prefs.putString("lastSlug", lastSlug);
+  prefs.putULong("lastSize", lastSize);
+  prefs.putUShort("scrnTo", screenTimeoutSec);
+  prefs.putString("bootSlug", defaultBootSlug);
+  prefs.putBool("imuGest", imuGesturesOn);
 }
 
 bool bootButtonDown() {
@@ -216,6 +273,144 @@ bool loadManifest() {
   return appCount > 0;
 }
 
+void resetIntroRain() {
+  randomSeed(micros());
+  for (uint8_t i = 0; i < INTRO_RAIN_COLS; i++) {
+    introRainY[i] = random(-static_cast<int>(display.height()), 0);
+    introRainSpeed[i] = random(7, 15);
+  }
+  introRainReady = true;
+}
+
+void drawIntroRain(Adafruit_GFX& d) {
+  if (!introRainReady) resetIntroRain();
+  static constexpr char glyphs[] = "01#*+<>/";
+  const int16_t colW = max(8, static_cast<int>(display.width()) / INTRO_RAIN_COLS);
+  d.setTextSize(1);
+  for (uint8_t col = 0; col < INTRO_RAIN_COLS; col++) {
+    const int16_t x = col * colW + (colW / 2);
+    for (uint8_t tail = 0; tail < 8; tail++) {
+      const int16_t y = introRainY[col] - tail * 14;
+      if (y < -8 || y >= static_cast<int>(display.height())) continue;
+      const uint16_t color = tail == 0 ? INTRO_MATRIX_HEAD :
+                             tail < 3 ? INTRO_MATRIX_MID : INTRO_MATRIX_DIM;
+      d.setTextColor(color);
+      d.setCursor(x, y);
+      d.write(glyphs[(col + tail + (millis() / 120)) % (sizeof(glyphs) - 1)]);
+    }
+    introRainY[col] += introRainSpeed[col];
+    if (introRainY[col] - 110 > static_cast<int>(display.height())) {
+      introRainY[col] = random(-80, 0);
+      introRainSpeed[col] = random(7, 15);
+    }
+  }
+}
+
+int16_t centeredTextX(Adafruit_GFX& d, const char* text, uint8_t textSize) {
+  d.setTextSize(textSize);
+  int16_t x1 = 0;
+  int16_t y1 = 0;
+  uint16_t tw = 0;
+  uint16_t th = 0;
+  d.getTextBounds(text, 0, 0, &x1, &y1, &tw, &th);
+  return max(0, (static_cast<int>(display.width()) - static_cast<int>(tw)) / 2);
+}
+
+void drawStartupIntro() {
+  if (!display.available()) return;
+
+  resetIntroRain();
+  Adafruit_GFX& d = display.gfx();
+  static constexpr const char* title = "CYPHER CUBE";
+  static constexpr const char* credit = "by littlehakr";
+  static constexpr uint32_t DURATION_MS = 4000;
+  static constexpr uint32_t FRAME_MS = 70;
+  static constexpr uint32_t REVEAL_MS = 1800;
+  static constexpr uint32_t TYPE_START_MS = 2000;
+  static constexpr uint32_t TYPE_MS = 1150;
+
+  const int16_t plateX = 18;
+  const int16_t plateY = 148;
+  const int16_t plateW = display.width() - plateX * 2;
+  const int16_t plateH = 150;
+  const int16_t titleY = plateY + 44;
+  const int16_t creditY = plateY + 104;
+
+  d.setTextSize(4);
+  int16_t bx = 0;
+  int16_t by = 0;
+  uint16_t titleW = 0;
+  uint16_t titleH = 0;
+  d.getTextBounds(title, 0, 0, &bx, &by, &titleW, &titleH);
+  const int16_t titleX = centeredTextX(d, title, 4);
+  const int16_t creditX = centeredTextX(d, credit, 2);
+  const uint32_t startedAt = millis();
+
+  d.fillScreen(INTRO_BG);
+  drawIntroRain(d);
+
+  while (millis() - startedAt < DURATION_MS) {
+    const uint32_t frameStart = millis();
+    const uint32_t elapsed = frameStart - startedAt;
+
+    d.fillRoundRect(plateX, plateY, plateW, plateH, 8, INTRO_PLATE);
+    d.drawRoundRect(plateX, plateY, plateW, plateH, 8, INTRO_PLATE_EDGE);
+    d.drawFastHLine(plateX + 14, plateY + 22, plateW - 28, INTRO_MATRIX_DIM);
+    d.drawFastHLine(plateX + 14, plateY + plateH - 22, plateW - 28, INTRO_MATRIX_DIM);
+
+    const uint32_t revealElapsed = min(elapsed, REVEAL_MS);
+    const int16_t revealW = (static_cast<uint32_t>(titleW + 12) * revealElapsed) / REVEAL_MS;
+    const int16_t beamX = titleX + revealW;
+
+    d.setTextSize(4);
+    d.setTextColor(COLOR_TEXT);
+    d.setCursor(titleX, titleY);
+    d.print(title);
+    if (revealW < static_cast<int>(titleW + 12)) {
+      d.fillRect(beamX, titleY - 4,
+                 display.width() - beamX - plateX, static_cast<int>(titleH) + 12,
+                 INTRO_PLATE);
+      d.drawFastVLine(beamX, titleY - 8, titleH + 18, INTRO_SCAN);
+      if (beamX + 2 < static_cast<int>(display.width()) - plateX) {
+        d.drawFastVLine(beamX + 2, titleY - 4, titleH + 10, INTRO_MATRIX_HEAD);
+      }
+    }
+
+    if (elapsed >= TYPE_START_MS) {
+      char shown[sizeof("by littlehakr")];
+      const uint32_t typeElapsed = min(elapsed - TYPE_START_MS, TYPE_MS);
+      uint8_t shownLen = (strlen(credit) * typeElapsed) / TYPE_MS;
+      if (shownLen > strlen(credit)) shownLen = strlen(credit);
+      memcpy(shown, credit, shownLen);
+      shown[shownLen] = '\0';
+      d.setTextSize(2);
+      d.setTextColor(INTRO_MATRIX_HEAD);
+      d.setCursor(creditX, creditY);
+      d.print(shown);
+      if ((millis() / 250) & 1) {
+        d.drawFastVLine(creditX + shownLen * 12 + 4, creditY, 16, INTRO_SCAN);
+      }
+    }
+
+    const uint32_t spent = millis() - frameStart;
+    if (spent < FRAME_MS) delay(FRAME_MS - spent);
+  }
+
+  d.fillRoundRect(plateX, plateY, plateW, plateH, 8, INTRO_PLATE);
+  d.drawRoundRect(plateX, plateY, plateW, plateH, 8, INTRO_PLATE_EDGE);
+  d.drawFastHLine(plateX + 14, plateY + 22, plateW - 28, INTRO_MATRIX_DIM);
+  d.drawFastHLine(plateX + 14, plateY + plateH - 22, plateW - 28, INTRO_MATRIX_DIM);
+  d.setTextSize(4);
+  d.setTextColor(COLOR_TEXT);
+  d.setCursor(titleX, titleY);
+  d.print(title);
+  d.setTextSize(2);
+  d.setTextColor(INTRO_MATRIX_HEAD);
+  d.setCursor(creditX, creditY);
+  d.print(credit);
+  delay(250);
+}
+
 void drawButton(int16_t x, int16_t y, int16_t w, int16_t h, const char* label,
                 bool selected = false, uint16_t color = COLOR_TEXT) {
   Adafruit_GFX& d = display.gfx();
@@ -265,17 +460,16 @@ void drawWrapped(const char* text, int16_t x, int16_t y, uint8_t maxChars, uint8
 
 void drawHome() {
   display.clear();
-  char countBuf[18];
-  snprintf(countBuf, sizeof(countBuf), "%u apps", appCount);
-  display.header("AMOLED OS", countBuf);
-  drawButton(22, 70, 324, 56, "SD App Catalog", false, sdMounted ? COLOR_TEXT : COLOR_WARN);
-  drawButton(22, 140, 324, 56, "Launch Installed", false,
+  display.header("Cypher Cube");
+  drawButton(22, 70, 324, 56, "SD App Catalog", selectedHome == 0,
+             sdMounted ? COLOR_TEXT : COLOR_WARN);
+  drawButton(22, 140, 324, 56, "Launch Installed", selectedHome == 1,
              appPartitionValid ? COLOR_TEXT : COLOR_DIM);
-  drawButton(22, 210, 324, 56, "Settings");
-  drawButton(22, 280, 324, 56, "System Info");
-  drawButton(22, 350, 324, 56, "Erase Installed", false,
+  drawButton(22, 210, 324, 56, "Settings", selectedHome == 2);
+  drawButton(22, 280, 324, 56, "System Info", selectedHome == 3);
+  drawButton(22, 350, 324, 56, "Erase Installed", selectedHome == 4,
              appPartitionValid ? COLOR_WARN : COLOR_DIM);
-  display.footer("Tap item", "BOOT: back");
+  display.footer("Tap item", "BOOT: next/select");
   if (statusLine[0]) drawWrapped(statusLine, 22, 420, 26, 1, COLOR_DIM);
 }
 
@@ -307,16 +501,105 @@ void drawApps() {
   display.footer("Back  Reload", "More");
 }
 
+const char* timeoutLabel() {
+  static char buf[16];
+  if (screenTimeoutSec == 0) return "never";
+  if (screenTimeoutSec < 60) {
+    snprintf(buf, sizeof(buf), "%us", screenTimeoutSec);
+  } else {
+    snprintf(buf, sizeof(buf), "%um", screenTimeoutSec / 60);
+  }
+  return buf;
+}
+
+void enterSetTime() {
+  editTime = WSensors::Rtc::now();
+  if (!editTime.valid || editTime.year < 2020) {
+    editTime = WSensors::DateTime{2026, 1, 1, 0, 0, 0, true};
+  }
+  timeField = 0;
+  screenMode = SCREEN_SET_TIME;
+  redraw();
+}
+
+constexpr int16_t SETTINGS_TOP = 48;
+constexpr int16_t SETTINGS_ROW_H = 45;
+constexpr int16_t SETTINGS_BTN_H = 42;
+constexpr uint8_t SETTINGS_ROWS = 8;
+
+int16_t settingRowY(uint8_t i) { return SETTINGS_TOP + i * SETTINGS_ROW_H; }
+
 void drawSettings() {
   display.clear();
   display.header("Settings");
-  drawButton(22, 78, 324, 60, bootToApp ? "Boot: installed app" : "Boot: launcher");
-  char bright[32];
-  snprintf(bright, sizeof(bright), "Brightness: %u", brightness);
-  drawButton(22, 158, 324, 60, bright);
-  drawButton(22, 238, 324, 60, "Reload SD catalog");
-  drawButton(22, 318, 324, 60, "Back");
+  char buf[40];
+  drawButton(20, settingRowY(0), 328, SETTINGS_BTN_H,
+             bootToApp ? "Boot: installed app" : "Boot: launcher");
+  snprintf(buf, sizeof(buf), "Brightness: %u", brightness);
+  drawButton(20, settingRowY(1), 328, SETTINGS_BTN_H, buf);
+  snprintf(buf, sizeof(buf), "Screen timeout: %s", timeoutLabel());
+  drawButton(20, settingRowY(2), 328, SETTINGS_BTN_H, buf);
+  snprintf(buf, sizeof(buf), "Shake to home: %s",
+           !WSensors::Imu::available() ? "no IMU" : (imuGesturesOn ? "on" : "off"));
+  drawButton(20, settingRowY(3), 328, SETTINGS_BTN_H, buf);
+  drawButton(20, settingRowY(4), 328, SETTINGS_BTN_H,
+             WSensors::Rtc::available() ? "Set time..." : "Set time (no RTC)");
+  snprintf(buf, sizeof(buf), "Boot app: %s",
+           defaultBootSlug[0] ? defaultBootSlug : "installed");
+  drawButton(20, settingRowY(5), 328, SETTINGS_BTN_H, buf);
+  drawButton(20, settingRowY(6), 328, SETTINGS_BTN_H, "Reload SD catalog");
+  drawButton(20, settingRowY(7), 328, SETTINGS_BTN_H, "Back");
   display.footer("Tap setting", "BOOT: back");
+}
+
+void drawSetTime() {
+  display.clear();
+  display.header("Set Time");
+  Adafruit_GFX& d = display.gfx();
+  const char* labels[5] = {"Year", "Month", "Day", "Hour", "Min"};
+  uint16_t vals[5] = {editTime.year, editTime.month, editTime.day,
+                      editTime.hour, editTime.minute};
+  for (uint8_t i = 0; i < 5; i++) {
+    const int16_t y = 56 + i * 50;
+    d.setTextSize(2);
+    d.setTextColor(i == timeField ? COLOR_ACCENT : COLOR_DIM, COLOR_BG);
+    d.setCursor(20, y + 12);
+    d.print(labels[i]);
+    drawButton(150, y, 44, 40, "-");
+    char vbuf[8];
+    snprintf(vbuf, sizeof(vbuf), (i == 0) ? "%04u" : "%02u", vals[i]);
+    d.setTextSize(3);
+    d.setTextColor(COLOR_TEXT, COLOR_BG);
+    d.setCursor(212, y + 8);
+    d.print(vbuf);
+    drawButton(300, y, 44, 40, "+");
+  }
+  drawButton(22, 330, 148, 54, "Cancel");
+  drawButton(198, 330, 148, 54, "Save", true);
+  display.footer("Tap +/-", "BOOT: cancel");
+}
+
+void drawPickBootApp() {
+  display.clear();
+  display.header("Default Boot App");
+  if (appCount == 0) {
+    drawWrapped("No catalog apps loaded.", 18, 80, 27, 3, COLOR_WARN);
+    display.footer("Back", nullptr);
+    return;
+  }
+  if (selectedApp < appScroll) appScroll = selectedApp;
+  if (selectedApp >= appScroll + 5) appScroll = selectedApp - 4;
+  const uint8_t visible = min<uint8_t>(5, appCount - appScroll);
+  // First row is the "none / installed" option, then the apps.
+  drawButton(18, 58, 332, 44, "(boot whatever is installed)",
+             defaultBootSlug[0] == '\0');
+  for (uint8_t i = 0; i < visible && i < 4; i++) {
+    const uint8_t idx = appScroll + i;
+    AppEntry& app = apps[idx];
+    drawButton(18, 110 + i * 58, 332, 48, app.name,
+               strcmp(app.slug, defaultBootSlug) == 0, COLOR_TEXT);
+  }
+  display.footer("Tap to pick", "More");
 }
 
 void drawInfo() {
@@ -332,6 +615,19 @@ void drawInfo() {
   d.setCursor(20, y); d.printf("Installed: %s", appPartitionValid ? lastInstalled : "none"); y += 30;
   d.setCursor(20, y); d.printf("Boot: %s", bootToApp ? "app" : "launcher"); y += 30;
   d.setCursor(20, y); d.printf("Heap: %u", ESP.getFreeHeap()); y += 30;
+  if (WSensors::Battery::available()) {
+    const int pct = WSensors::Battery::percent();
+    d.setCursor(20, y);
+    d.printf("Batt: %d%% %s", pct, WSensors::Battery::isCharging() ? "CHG" : "");
+    y += 30;
+  }
+  if (WSensors::Rtc::available()) {
+    WSensors::DateTime t = WSensors::Rtc::now();
+    d.setCursor(20, y);
+    d.printf("Time: %04u-%02u-%02u %02u:%02u", t.year, t.month, t.day, t.hour,
+             t.minute);
+    y += 30;
+  }
   if (part) {
     d.setCursor(20, y); d.printf("App1: 0x%06X", part->address); y += 30;
     d.setCursor(20, y); d.printf("Size: %u KB", part->size / 1024); y += 30;
@@ -343,16 +639,26 @@ void drawInfo() {
 void drawConfirmInstall() {
   display.clear();
   AppEntry& app = apps[selectedApp];
-  display.header("Install App?");
+  const bool already = relaunchMatchesInstalled();
+  display.header(already ? "Launch App?" : "Install App?");
   Adafruit_GFX& d = display.gfx();
   d.setTextSize(2);
   d.setTextColor(COLOR_ACCENT, COLOR_BG);
   d.setCursor(22, 70);
   d.print(app.name);
   drawWrapped(app.notes, 22, 108, 27, 4, COLOR_DIM);
-  drawWrapped("This copies the SD .bin into the app partition and reboots.", 22, 230, 27, 4, COLOR_WARN);
-  drawButton(22, 344, 148, 54, "Cancel");
-  drawButton(198, 344, 148, 54, "Install", true);
+  if (already) {
+    drawWrapped("Already in the app slot. Launch instantly, or reinstall the copy.",
+                22, 230, 27, 3, COLOR_DIM);
+    drawButton(22, 330, 100, 60, "Cancel");
+    drawButton(134, 330, 100, 60, "Reinstall", false, COLOR_WARN);
+    drawButton(246, 330, 100, 60, "Launch", true);
+  } else {
+    drawWrapped("This copies the SD .bin into the app partition and reboots.",
+                22, 230, 27, 4, COLOR_WARN);
+    drawButton(22, 344, 148, 54, "Cancel");
+    drawButton(198, 344, 148, 54, "Install", true);
+  }
   display.footer("BOOT: cancel");
 }
 
@@ -412,10 +718,14 @@ void redraw() {
     case SCREEN_HOME: drawHome(); break;
     case SCREEN_APPS: drawApps(); break;
     case SCREEN_SETTINGS: drawSettings(); break;
+    case SCREEN_SET_TIME: drawSetTime(); break;
+    case SCREEN_PICK_BOOT_APP: drawPickBootApp(); break;
     case SCREEN_INFO: drawInfo(); break;
     case SCREEN_CONFIRM_INSTALL: drawConfirmInstall(); break;
     case SCREEN_MESSAGE: display.message(messageTitle, messageBody); break;
   }
+  // Battery glyph + clock overlay in the header band, on every screen.
+  WSensors::drawStatusChrome(display.gfx(), static_cast<int16_t>(display.width()));
 }
 
 TapEvent readTap() {
@@ -454,6 +764,8 @@ bool eraseInstalled() {
   }
   appPartitionValid = false;
   lastInstalled[0] = '\0';
+  lastSlug[0] = '\0';
+  lastSize = 0;
   savePrefs();
   setStatus("Installed app erased");
   return true;
@@ -495,7 +807,20 @@ bool eraseForImage(const AppEntry& app, const esp_partition_t* part, size_t file
   return true;
 }
 
-bool installSelectedApp() {
+bool relaunchMatchesInstalled() {
+  if (selectedApp >= appCount || !appPartitionValid || !lastSlug[0]) return false;
+  AppEntry& app = apps[selectedApp];
+  if (strcmp(app.slug, lastSlug) != 0) return false;
+  char path[128];
+  snprintf(path, sizeof(path), "%s/%s", APP_DIR, app.binary);
+  File f = SD_MMC.open(path, FILE_READ);
+  if (!f) return false;
+  const uint32_t sz = f.size();
+  f.close();
+  return sz == lastSize;
+}
+
+bool installSelectedApp(bool force) {
   if (selectedApp >= appCount) return false;
   AppEntry& app = apps[selectedApp];
   if (!app.installable) {
@@ -536,6 +861,20 @@ bool installSelectedApp() {
     file.close();
     showMessage("Bad Image", "The file does not look like an ESP32 app image.");
     return false;
+  }
+
+  // Fast path: the same app (slug + byte size) is already in app1. Skip the
+  // erase/write entirely and just point boot at it. Saves flash wear and time.
+  if (!force && appPartitionValid && lastSlug[0] &&
+      strcmp(app.slug, lastSlug) == 0 && fileSize == lastSize) {
+    file.close();
+    Serial.printf("[install] %s already in app1; skipping copy\n", app.slug);
+    if (setBootPartition(part)) {
+      drawInstallProgress(app.name, "Launching", fileSize, fileSize, 100, COLOR_GOOD);
+      delay(400);
+      ESP.restart();
+    }
+    return true;
   }
 
   drawInstallProgress(app.name, "Preparing", 0, fileSize, 0, COLOR_ACCENT);
@@ -585,6 +924,8 @@ bool installSelectedApp() {
   file.close();
 
   copyField(lastInstalled, sizeof(lastInstalled), app.name);
+  copyField(lastSlug, sizeof(lastSlug), app.slug);
+  lastSize = static_cast<uint32_t>(fileSize);
   appPartitionValid = true;
   savePrefs();
   if (setBootPartition(part)) {
@@ -595,20 +936,37 @@ bool installSelectedApp() {
   return true;
 }
 
-void handleHomeTap(uint16_t, uint16_t y) {
-  if (y >= 70 && y < 126) {
+void activateHomeSelection() {
+  if (selectedHome == 0) {
     screenMode = SCREEN_APPS;
-  } else if (y >= 140 && y < 196) {
+  } else if (selectedHome == 1) {
     launchInstalled();
     return;
-  } else if (y >= 210 && y < 266) {
+  } else if (selectedHome == 2) {
     screenMode = SCREEN_SETTINGS;
-  } else if (y >= 280 && y < 336) {
+  } else if (selectedHome == 3) {
     screenMode = SCREEN_INFO;
-  } else if (y >= 350 && y < 406) {
+  } else if (selectedHome == 4) {
     if (eraseInstalled()) showMessage("Erased", "The app partition was erased. The launcher remains installed.");
   }
   redraw();
+}
+
+void handleHomeTap(uint16_t, uint16_t y) {
+  if (y >= 70 && y < 126) {
+    selectedHome = 0;
+  } else if (y >= 140 && y < 196) {
+    selectedHome = 1;
+  } else if (y >= 210 && y < 266) {
+    selectedHome = 2;
+  } else if (y >= 280 && y < 336) {
+    selectedHome = 3;
+  } else if (y >= 350 && y < 406) {
+    selectedHome = 4;
+  } else {
+    return;
+  }
+  activateHomeSelection();
 }
 
 void handleAppsTap(uint16_t x, uint16_t y) {
@@ -636,38 +994,225 @@ void handleAppsTap(uint16_t x, uint16_t y) {
   }
 }
 
+void cycleScreenTimeout() {
+  if (screenTimeoutSec == 30) {
+    screenTimeoutSec = 60;
+  } else if (screenTimeoutSec == 60) {
+    screenTimeoutSec = 120;
+  } else if (screenTimeoutSec == 120) {
+    screenTimeoutSec = 300;
+  } else if (screenTimeoutSec == 300) {
+    screenTimeoutSec = 0;
+  } else {
+    screenTimeoutSec = 30;
+  }
+}
+
 void handleSettingsTap(uint16_t, uint16_t y) {
-  if (y >= 78 && y < 138) {
-    bootToApp = !bootToApp;
-    savePrefs();
-  } else if (y >= 158 && y < 218) {
-    brightness = brightness >= 240 ? 80 : brightness + 40;
-    display.setBrightness(brightness);
-    savePrefs();
-  } else if (y >= 238 && y < 298) {
-    mountSd();
-    loadManifest();
-  } else if (y >= 318 && y < 378) {
-    screenMode = SCREEN_HOME;
+  int row = -1;
+  for (uint8_t i = 0; i < SETTINGS_ROWS; i++) {
+    if (y >= settingRowY(i) && y < settingRowY(i) + SETTINGS_BTN_H) {
+      row = i;
+      break;
+    }
+  }
+  switch (row) {
+    case 0:
+      bootToApp = !bootToApp;
+      savePrefs();
+      break;
+    case 1:
+      brightness = brightness >= 240 ? 80 : brightness + 40;
+      display.setBrightness(brightness);
+      savePrefs();
+      break;
+    case 2:
+      cycleScreenTimeout();
+      savePrefs();
+      break;
+    case 3:
+      if (WSensors::Imu::available()) {
+        imuGesturesOn = !imuGesturesOn;
+        savePrefs();
+      }
+      break;
+    case 4:
+      if (WSensors::Rtc::available()) {
+        enterSetTime();
+        return;
+      }
+      break;
+    case 5:
+      screenMode = SCREEN_PICK_BOOT_APP;
+      redraw();
+      return;
+    case 6:
+      mountSd();
+      loadManifest();
+      break;
+    case 7:
+      screenMode = SCREEN_HOME;
+      break;
+    default:
+      return;
   }
   redraw();
 }
 
+void adjustTimeField(int delta) {
+  switch (timeField) {
+    case 0:
+      editTime.year = constrain(editTime.year + delta, 2020, 2099);
+      break;
+    case 1:
+      editTime.month = constrain(editTime.month + delta, 1, 12);
+      break;
+    case 2:
+      editTime.day = constrain(editTime.day + delta, 1, 31);
+      break;
+    case 3:
+      editTime.hour = (editTime.hour + 24 + delta) % 24;
+      break;
+    case 4:
+      editTime.minute = (editTime.minute + 60 + delta) % 60;
+      break;
+    default:
+      break;
+  }
+}
+
+void handleSetTimeTap(uint16_t x, uint16_t y) {
+  // Field rows.
+  for (uint8_t i = 0; i < 5; i++) {
+    const int16_t rowY = 56 + i * 50;
+    if (y >= rowY && y < rowY + 40) {
+      timeField = i;
+      if (x >= 150 && x < 194) {
+        adjustTimeField(-1);
+      } else if (x >= 300 && x < 344) {
+        adjustTimeField(1);
+      }
+      redraw();
+      return;
+    }
+  }
+  // Cancel / Save.
+  if (y >= 330 && y < 384) {
+    if (x < 184) {
+      screenMode = SCREEN_SETTINGS;
+    } else {
+      editTime.second = 0;
+      WSensors::Rtc::set(editTime);
+      setStatus("Clock updated");
+      screenMode = SCREEN_SETTINGS;
+    }
+    redraw();
+  }
+}
+
+void handlePickBootAppTap(uint16_t x, uint16_t y) {
+  if (y >= display.height() - 38) {
+    if (x >= 240 && appCount > 0) {
+      selectedApp = min<uint8_t>(appCount - 1, selectedApp + 4);
+    } else {
+      screenMode = SCREEN_SETTINGS;
+    }
+    redraw();
+    return;
+  }
+  if (y >= 58 && y < 102) {
+    defaultBootSlug[0] = '\0';
+    bootToApp = false;
+    savePrefs();
+    screenMode = SCREEN_SETTINGS;
+    redraw();
+    return;
+  }
+  if (appCount == 0) return;
+  if (y >= 110 && y < 110 + 4 * 58) {
+    const uint8_t row = (y - 110) / 58;
+    const uint8_t idx = appScroll + row;
+    if (idx < appCount) {
+      copyField(defaultBootSlug, sizeof(defaultBootSlug), apps[idx].slug);
+      bootToApp = true;
+      savePrefs();
+      screenMode = SCREEN_SETTINGS;
+      redraw();
+    }
+  }
+}
+
 void handleConfirmTap(uint16_t x, uint16_t y) {
+  if (relaunchMatchesInstalled()) {
+    if (y >= 330 && y < 390) {
+      if (x < 122) {
+        screenMode = SCREEN_APPS;
+        redraw();
+      } else if (x < 234) {
+        installSelectedApp(true);  // reinstall (full copy)
+      } else {
+        installSelectedApp(false);  // launch (skip copy)
+      }
+    }
+    return;
+  }
   if (y >= 344 && y < 398) {
     if (x < 184) {
       screenMode = SCREEN_APPS;
       redraw();
     } else {
-      installSelectedApp();
+      installSelectedApp(false);
     }
   }
 }
 
 void goBack() {
   if (screenMode == SCREEN_HOME) return;
-  screenMode = (screenMode == SCREEN_CONFIRM_INSTALL) ? SCREEN_APPS : SCREEN_HOME;
+  if (screenMode == SCREEN_CONFIRM_INSTALL) {
+    screenMode = SCREEN_APPS;
+  } else if (screenMode == SCREEN_SET_TIME || screenMode == SCREEN_PICK_BOOT_APP) {
+    screenMode = SCREEN_SETTINGS;
+  } else {
+    screenMode = SCREEN_HOME;
+  }
   redraw();
+}
+
+void noteActivity() { lastActivityAt = millis(); }
+
+void wakeScreen() {
+  screenAsleep = false;
+  display.setBrightness(brightness);
+  noteActivity();
+  redraw();
+}
+
+void maybeSleep() {
+  if (screenAsleep || screenTimeoutSec == 0) return;
+  if (millis() - lastActivityAt >= static_cast<uint32_t>(screenTimeoutSec) * 1000UL) {
+    display.setBrightness(0);
+    screenAsleep = true;
+  }
+}
+
+// Shake-to-home gesture, polled while the screen is awake.
+// (Flip-to-sleep was removed: static face-down detection depends on the board's
+//  IMU axis orientation and misfired during normal handling, turning the screen
+//  off instantly. The screen timeout already covers idle sleep. Shake-to-home
+//  uses acceleration magnitude, which is sign-independent and safe.)
+void checkImuGestures() {
+  if (!imuGesturesOn || !WSensors::Imu::available()) return;
+  static uint32_t lastCheck = 0;
+  const uint32_t now = millis();
+  if (now - lastCheck < 150) return;
+  lastCheck = now;
+
+  static uint32_t lastShake = 0;
+  if (WSensors::Imu::isShaken(2.4f) && now - lastShake > 1500) {
+    lastShake = now;
+    noteActivity();
+    if (screenMode != SCREEN_HOME) goHome();
+  }
 }
 
 void goHome() {
@@ -675,14 +1220,27 @@ void goHome() {
   redraw();
 }
 
-void handleBootButton() {
-  const bool down = bootButtonDown();
+void handleBootButton(bool down) {
   const uint32_t now = millis();
   if (down && !bootWasDown) {
     bootDownAt = now;
+    noteActivity();
   } else if (!down && bootWasDown) {
+    if (swallowBootRelease) {
+      swallowBootRelease = false;
+      bootWasDown = down;
+      return;
+    }
+    noteActivity();
     const uint32_t held = now - bootDownAt;
-    if (held > 900) {
+    if (screenMode == SCREEN_HOME) {
+      if (held > 900) {
+        activateHomeSelection();
+      } else {
+        selectedHome = (selectedHome + 1) % 5;
+        redraw();
+      }
+    } else if (held > 900) {
       goHome();
     } else {
       goBack();
@@ -723,8 +1281,12 @@ void runSerialCommand(char* cmd) {
   while (*cmd == ' ') cmd++;
   if (!*cmd) return;
   Serial.printf("> %s\n", cmd);
+  if (SerialShell::handleLine(cmd)) {
+    return;
+  }
   if (strcmp(cmd, "help") == 0) {
-    Serial.println("help, status, apps, reload, launch, erase, install <slug>, boot launcher, boot app");
+    Serial.println("help, status, apps, reload, launch, erase, install <slug>, boot launcher, boot app, bright <0-255>, screen on|off");
+    SerialShell::printHelp();
   } else if (strcmp(cmd, "status") == 0) {
     printStatus();
   } else if (strcmp(cmd, "apps") == 0) {
@@ -746,8 +1308,31 @@ void runSerialCommand(char* cmd) {
       Serial.println("app slug not found");
     } else {
       selectedApp = static_cast<uint8_t>(idx);
-      installSelectedApp();
+      installSelectedApp(false);
     }
+  } else if (strncmp(cmd, "bright", 6) == 0 && (cmd[6] == ' ' || cmd[6] == '\0')) {
+    const char* arg = cmd + 6;
+    while (*arg == ' ') arg++;
+    if (!*arg) {
+      Serial.printf("brightness=%u\n", brightness);
+    } else {
+      int v = atoi(arg);
+      if (v < 0) v = 0;
+      if (v > 255) v = 255;
+      brightness = static_cast<uint8_t>(v);
+      screenAsleep = false;
+      display.setBrightness(brightness);
+      noteActivity();
+      savePrefs();
+      Serial.printf("brightness=%u\n", brightness);
+    }
+  } else if (strcmp(cmd, "screen on") == 0) {
+    wakeScreen();
+    Serial.println("screen on");
+  } else if (strcmp(cmd, "screen off") == 0) {
+    display.setBrightness(0);
+    screenAsleep = true;
+    Serial.println("screen off");
   } else {
     Serial.println("unknown command; type help");
   }
@@ -775,7 +1360,7 @@ void launcherSetup() {
   Serial.begin(SERIAL_BAUD);
   delay(250);
   Serial.println();
-  Serial.println("[boot] Waveshare AMOLED OS");
+  Serial.println("[boot] Cypher Cube");
 
   const bool forceMenu = forceLauncherAtBoot();
   loadPrefs();
@@ -784,6 +1369,8 @@ void launcherSetup() {
   display.begin();
   display.setBrightness(brightness);
   touch.begin();
+  WSensors::begin();  // battery / RTC / IMU on the shared Wire bus
+  drawStartupIntro();
   mountSd();
   loadManifest();
 
@@ -791,29 +1378,57 @@ void launcherSetup() {
     bootToApp = false;
     savePrefs();
     setStatus("BOOT held: staying in launcher");
-  } else if (bootToApp && appPartitionValid) {
-    Serial.println("[boot] auto-launching installed app");
-    launchInstalled();
+  } else if (bootToApp) {
+    const int idx = defaultBootSlug[0] ? findAppBySlug(defaultBootSlug) : -1;
+    if (idx >= 0) {
+      Serial.printf("[boot] auto-booting default app %s\n", defaultBootSlug);
+      selectedApp = static_cast<uint8_t>(idx);
+      installSelectedApp(false);  // skip-recopy fast-boots if already installed
+    } else if (appPartitionValid) {
+      Serial.println("[boot] auto-launching installed app");
+      launchInstalled();
+    }
   }
 
   setBootPartition(launcherPartition());
   redraw();
+  noteActivity();
   Serial.println("[serial] type help");
 }
 
 void launcherLoop() {
   handleSerial();
-  handleBootButton();
+  const bool bootNow = bootButtonDown();
   TapEvent tap = readTap();
-  if (!tap.tapped) {
+
+  // While asleep, the first touch or BOOT press only wakes the screen.
+  if (screenAsleep) {
+    const bool bootEdge = bootNow && !bootWasDown;
+    if (tap.tapped || bootEdge) {
+      if (bootEdge) swallowBootRelease = true;
+      wakeScreen();
+    }
+    bootWasDown = bootNow;
     delay(12);
     return;
   }
 
+  handleBootButton(bootNow);
+
+  if (!tap.tapped) {
+    checkImuGestures();
+    maybeSleep();
+    delay(12);
+    return;
+  }
+
+  noteActivity();
   switch (screenMode) {
     case SCREEN_HOME: handleHomeTap(tap.x, tap.y); break;
     case SCREEN_APPS: handleAppsTap(tap.x, tap.y); break;
     case SCREEN_SETTINGS: handleSettingsTap(tap.x, tap.y); break;
+    case SCREEN_SET_TIME: handleSetTimeTap(tap.x, tap.y); break;
+    case SCREEN_PICK_BOOT_APP: handlePickBootAppTap(tap.x, tap.y); break;
     case SCREEN_INFO:
     case SCREEN_MESSAGE:
       goBack();

@@ -2,9 +2,9 @@
 
 Status: `ready`
 
-Source route: local Waveshare diagnostic sketch.
+Source route: local Cypher Cube diagnostic sketch.
 
-## Waveshare Controls
+## Cypher Cube Controls
 
 - Touch anywhere to show remapped FT3168 coordinates.
 - Use the display to confirm SH8601 orientation and touch calibration.

@@ -27,6 +27,11 @@ echo "[launcher] compiling Waveshare AMOLED OS"
   --library "${ARDUINO_LIB_ROOT}/Adafruit_XCA9554" \
   --library "${ARDUINO_LIB_ROOT}/GFX_Library_for_Arduino" \
   --library "${ARDUINO_LIB_ROOT}/Arduino_DriveBus" \
+  --library "${ARDUINO_LIB_ROOT}/XPowersLib" \
+  --library "${ARDUINO_LIB_ROOT}/SensorLib" \
+  --library "${ARDUINO_LIB_ROOT}/NimBLE-Arduino" \
+  --library "${ROOT}/libraries/WaveshareAmoledReturn" \
+  --library "${ROOT}/libraries/WaveshareAmoledSensors" \
   --output-dir "${OUT}" \
   "${ROOT}"
 
