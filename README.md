@@ -1,3 +1,5 @@
+![Cypher Cube OS banner](docs/images/cypher-cube-os-banner.png)
+
 # Cypher Cube
 
 Cypher Cube is a pocket-sized touchscreen launcher for local ESP32 apps. Flash
