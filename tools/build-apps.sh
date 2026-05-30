@@ -17,6 +17,7 @@ RETURN_LIB="${ROOT}/libraries/WaveshareAmoledReturn"
 APPKIT_LIB="${ROOT}/libraries/WaveshareAmoledAppKit"
 PORTS_LIB="${ROOT}/libraries/WaveshareAmoledPorts"
 CYPHERBOX_LIB="${ROOT}/libraries/WaveshareCypherboxPort"
+SENSORS_LIB="${ROOT}/libraries/WaveshareAmoledSensors"
 
 ARDUINO_CLI="${ARDUINO_CLI:-$(command -v arduino-cli || true)}"
 if [[ -z "${ARDUINO_CLI}" && -x /opt/homebrew/bin/arduino-cli ]]; then
@@ -37,6 +38,7 @@ LIB_FLAGS=(
   --library "${APPKIT_LIB}"
   --library "${PORTS_LIB}"
   --library "${CYPHERBOX_LIB}"
+  --library "${SENSORS_LIB}"
 )
 
 add_lib() {
@@ -53,6 +55,7 @@ add_lib "GFX_Library_for_Arduino"
 add_lib "Arduino_DriveBus"
 add_lib "ArduinoJson"
 add_lib "XPowersLib"
+add_lib "SensorLib"
 add_lib "TinyGPSPlus"
 add_lib "M5GFX"
 add_lib "M5Unified"
@@ -153,6 +156,78 @@ path.write_text(text, encoding="utf-8")
 PY
     done
   fi
+  if [[ "${slug}" == "cypher-drive" && -f "${prepared}/src/main.cpp" ]]; then
+    python3 - "${prepared}/src/main.cpp" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+include = "#include <WaveshareAmoledIntro.h>\n"
+if include not in text:
+    marker = "#include <CypherPuterReturn.h>\n"
+    if marker not in text:
+        raise SystemExit(f"missing CypherPuterReturn include in {path}")
+    text = text.replace(marker, marker + include, 1)
+
+needle = "static void drawIntroScreen(DisplayPort &display) {"
+start = text.find(needle)
+if start < 0:
+    raise SystemExit(f"drawIntroScreen not found in {path}")
+
+pos = start + len(needle)
+depth = 1
+while pos < len(text) and depth:
+    ch = text[pos]
+    if ch == "{":
+        depth += 1
+    elif ch == "}":
+        depth -= 1
+    pos += 1
+if depth:
+    raise SystemExit(f"drawIntroScreen braces did not balance in {path}")
+
+replacement = """static void drawIntroScreen(DisplayPort &display) {
+  WaveshareAmoledIntro::draw(display.gfx(), display.width(), display.height(),
+                             "Cypher Drive");
+}
+"""
+text = text[:start] + replacement + text[pos:]
+path.write_text(text, encoding="utf-8")
+PY
+  fi
+  if [[ "${slug}" == "cypher-chat" && -f "${prepared}/CardputerUI.cpp" ]]; then
+    python3 - "${prepared}/CardputerUI.cpp" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+text = path.read_text(encoding="utf-8")
+include = "#include <WaveshareAmoledIntro.h>\n"
+if include not in text:
+    marker = '#include "PowerPort.h"\n'
+    if marker not in text:
+        raise SystemExit(f"missing PowerPort include in {path}")
+    text = text.replace(marker, marker + "\n" + include, 1)
+
+old = """void CardputerUI::begin() {
+  displayPort.begin();
+  powerPort.begin();
+"""
+new = """void CardputerUI::begin() {
+  displayPort.begin();
+  if (displayPort.available()) {
+    WaveshareAmoledIntro::draw(displayPort.gfx(), displayPort.width(),
+                               displayPort.height(), "Cypher Chat");
+  }
+  powerPort.begin();
+"""
+if old not in text:
+    raise SystemExit(f"CardputerUI::begin insertion point not found in {path}")
+text = text.replace(old, new, 1)
+path.write_text(text, encoding="utf-8")
+PY
+  fi
   if [[ "${slug}" == "flock-you" && -f "${prepared}/src/FlockYouCore.h" ]]; then
     python3 - "${prepared}/src/FlockYouCore.h" <<'PY'
 from pathlib import Path
@@ -160,6 +235,29 @@ import sys
 
 path = Path(sys.argv[1])
 text = path.read_text(encoding="utf-8")
+intro_include = "#include <WaveshareAmoledIntro.h>\n"
+if intro_include not in text:
+    marker = "#if USE_AMOLED_DISPLAY\n"
+    if marker not in text:
+        raise SystemExit(f"missing AMOLED include block in {path}")
+    text = text.replace(marker, marker + intro_include, 1)
+
+old_splash = """  amoled->drawRoundRect(20, 36, AMOLED_W - 40, AMOLED_H - 72, 18, AMOLED_ACCENT);
+  amoledText(55, 128, "CYPHER", 4, AMOLED_WHITE);
+  amoledText(55, 178, "FLOCK", 4, AMOLED_ACCENT);
+  amoledText(55, 250, "passive detector", 2, AMOLED_DIM);
+  char pwr[16];
+  powerLabel(pwr, sizeof(pwr));
+  amoledPrintf(55, 282, 2, AMOLED_OK, "touch %s  power %s", uiTouchReady ? "ok" : "off", pwr);
+  delay(5000);
+"""
+new_splash = """  WaveshareAmoledIntro::draw(*amoled, AMOLED_W, AMOLED_H, "Flock You");
+"""
+if old_splash in text:
+    text = text.replace(old_splash, new_splash, 1)
+elif "AMOLED splash drawing" in text and "WaveshareAmoledIntro::draw" not in text:
+    raise SystemExit(f"unrecognized AMOLED splash block in {path}")
+
 old_touch = """static void amoledRemapTouch(int32_t rawX, int32_t rawY, int16_t& outX, int16_t& outY) {
   int32_t x = rawY;
   int32_t y = (AMOLED_H - 1) - rawX;
@@ -274,9 +372,6 @@ build_local() {
   build_sketch "$1" "$2" "${ROOT}/apps/$2" "$3" "$4" "$5" "$6" "" "${7:-1}"
 }
 
-build_local "Touch Diagnostics" "touch-diagnostics" "touch-diagnostics.bin" "ready" "true" "AMOLED and FT3168 touch coordinate test with BOOT return."
-build_local "SD Status" "sd-status" "sd-status.bin" "ready" "true" "Shows SD mount, capacity, usage, and catalog presence."
-
 CYPHER_DRIVE_DIR="${WAVESHARE_OS_CYPHER_DRIVE_DIR:-${WORKSPACE_ROOT}/cypher-drive}"
 CYPHER_CHAT_ROOT="${WAVESHARE_OS_CYPHER_CHAT_DIR:-${WORKSPACE_ROOT}/cypher-chat}"
 if [[ -d "${CYPHER_CHAT_ROOT}/cypher-chat-firmware" ]]; then
@@ -286,12 +381,17 @@ else
 fi
 FLOCK_YOU_DIR="${WAVESHARE_OS_FLOCK_YOU_DIR:-${WORKSPACE_ROOT}/flock-you}"
 
-build_sketch "Cypher Drive" "cypher-drive" "${CYPHER_DRIVE_DIR}" "cypher-drive.bin" "ready" "true" \
-  "Direct AMOLED profile build from sibling cypher-drive with Cypher launcher return helper." \
-  "-DESP32 -DBOARD_PROFILE=BOARD_PROFILE_WAVESHARE_TOUCH_AMOLED_18" 1
+# Catalog order = launcher menu order. Featured apps first, utilities last.
+
+build_local "Pomodoro" "pomodoro" "pomodoro.bin" "ready" "true" \
+  "Focus timer (25/5/15) with theme colors, RTC clock, and tap controls."
 
 build_sketch "Cypher Chat" "cypher-chat" "${CYPHER_CHAT_DIR}" "cypher-chat.bin" "ready" "true" \
   "Direct Waveshare AMOLED mesh chat build from sibling cypher-chat firmware." \
+  "-DESP32 -DBOARD_PROFILE=BOARD_PROFILE_WAVESHARE_TOUCH_AMOLED_18" 1
+
+build_sketch "Cypher Drive" "cypher-drive" "${CYPHER_DRIVE_DIR}" "cypher-drive.bin" "ready" "true" \
+  "Direct AMOLED profile build from sibling cypher-drive with Cypher launcher return helper." \
   "-DESP32 -DBOARD_PROFILE=BOARD_PROFILE_WAVESHARE_TOUCH_AMOLED_18" 1
 
 build_sketch "Flock You" "flock-you" "${FLOCK_YOU_DIR}" "flock-you.bin" "ready" "true" \
@@ -302,6 +402,14 @@ build_local "Cypherbox WiFi Tools" "cypherbox-wifi-tools" "cypherbox-wifi-tools.
   "Touch and USB serial WiFi lab tools: scan, heatmap, captive portal, attacks, and read-only SD web server."
 build_local "Cypherbox BLE Tools" "cypherbox-ble-tools" "cypherbox-ble-tools.bin" "cypherbox_port" "true" \
   "Touch, USB serial, and BLE Serial tools: BLE scan, spam, HID payloads, mouse jiggler, pairing, and SD file listing."
+
+# --- Utilities (bottom of the launcher menu) ---
+build_local "Tricorder" "tricorder" "tricorder.bin" "ready" "true" \
+  "Battery, RTC, IMU, and strongest WiFi RSSI on one screen."
+build_local "SD Status" "sd-status" "sd-status.bin" "ready" "true" \
+  "Shows SD mount, capacity, usage, and catalog presence."
+build_local "Touch Diagnostics" "touch-diagnostics" "touch-diagnostics.bin" "ready" "true" \
+  "AMOLED and FT3168 touch coordinate test with BOOT return."
 
 python3 - "${CATALOG_TSV}" "${DIST}/apps.json" <<'PY'
 import csv

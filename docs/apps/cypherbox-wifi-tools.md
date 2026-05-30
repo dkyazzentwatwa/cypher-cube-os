@@ -1,10 +1,10 @@
-# Cypherbox WiFi Tools
+# Cypher Cube WiFi Tools
 
 Status: `cypherbox_port`
 
-Touch-native Waveshare port of the Cypherbox Mini WiFi tool family. This app
-uses only the Waveshare board's built-in ESP32-S3 radio, touch screen, SD card,
-BOOT button, and USB serial shell.
+Touch-native Cypher Cube port of the Cypherbox Mini WiFi tool family. This app
+uses only the Cypher Cube's built-in ESP32-S3 radio, touch screen, SD card, BOOT
+button, and USB serial shell.
 
 ## Features
 
@@ -14,7 +14,7 @@ BOOT button, and USB serial shell.
 - Active WiFi lab tools: deauth target, deauth all, beacon flood, probe flood,
   and PMKID capture.
 - Read-only SD web server over AP `WAVE-CYPHERBOX`.
-- Cypherbox SD file listing under `/waveshare-os/cypherbox`.
+- Shared SD file listing under `/waveshare-os/cypherbox`.
 
 ## Controls
 

@@ -5,6 +5,7 @@
 #include <Wire.h>
 #include <memory>
 
+#include <WaveshareAmoledIntro.h>
 #include <WaveshareAmoledReturn.h>
 
 constexpr uint16_t LCD_WIDTH = 368;
@@ -57,6 +58,7 @@ void setupDisplay() {
   gfx = new Arduino_SH8601(bus, -1, 0, LCD_WIDTH, LCD_HEIGHT);
   gfx->begin();
   gfx->setBrightness(220);
+  WaveshareAmoledIntro::draw(*gfx, LCD_WIDTH, LCD_HEIGHT, "Touch Diagnostics");
   drawStatic();
 }
 

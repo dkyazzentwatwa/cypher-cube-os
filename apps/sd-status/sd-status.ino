@@ -3,6 +3,7 @@
 #include <SD_MMC.h>
 #include <Wire.h>
 
+#include <WaveshareAmoledIntro.h>
 #include <WaveshareAmoledReturn.h>
 
 constexpr uint16_t LCD_WIDTH = 368;
@@ -40,6 +41,7 @@ void setupDisplay() {
   gfx = new Arduino_SH8601(bus, -1, 0, LCD_WIDTH, LCD_HEIGHT);
   gfx->begin();
   gfx->setBrightness(220);
+  WaveshareAmoledIntro::draw(*gfx, LCD_WIDTH, LCD_HEIGHT, "SD Status");
   gfx->fillScreen(0x0000);
   gfx->fillRect(0, 0, LCD_WIDTH, 42, 0x0186);
   gfx->setTextSize(2);
@@ -93,4 +95,3 @@ void loop() {
   }
   delay(50);
 }
-

@@ -1,4 +1,5 @@
 #include "WaveshareAmoledAppKit.h"
+#include "WaveshareAmoledIntro.h"
 
 #include <Adafruit_XCA9554.h>
 #include <Arduino_DriveBus_Library.h>
@@ -176,6 +177,8 @@ bool begin(const char* title, bool mountCard) {
     gfx.setTextSize(2);
     gfx.setTextColor(kColorText, kColorBg);
     clear();
+    WaveshareAmoledIntro::draw(gfx, kDisplayWidth, kDisplayHeight,
+                               title ? title : "Cypher Cube");
     if (title) header(title);
   } else {
     Serial.println("[appkit] SH8601 init failed");

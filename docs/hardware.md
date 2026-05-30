@@ -1,6 +1,6 @@
-# Hardware Notes
+# Cypher Cube Hardware Notes
 
-The v1 target is the Waveshare ESP32-S3-Touch-AMOLED-1.8.
+The Cypher Cube v1 target is the Waveshare ESP32-S3-Touch-AMOLED-1.8.
 
 The implementation uses the current Waveshare-documented hardware path:
 
@@ -14,4 +14,3 @@ The implementation uses the current Waveshare-documented hardware path:
 Pin constants are kept in `src/BoardConfig.h` so the launcher and app examples
 have one place to audit if Waveshare revises the board or if a different SKU is
 used.
-

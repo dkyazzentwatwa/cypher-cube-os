@@ -1,5 +1,13 @@
 #include "DisplayPort.h"
 
+namespace {
+constexpr int16_t CHROME_INSET = 24;
+constexpr int16_t HEADER_HEIGHT = 44;
+constexpr int16_t FOOTER_HEIGHT = 38;
+constexpr uint16_t HEADER_BG = 0x0186;
+constexpr uint16_t FOOTER_RULE = 0x39E7;
+}
+
 void ArduinoGfxBridge::drawPixel(int16_t x, int16_t y, uint16_t color) {
   if (_driver) _driver->drawPixel(x, y, color);
 }
@@ -106,10 +114,10 @@ void DisplayPort::clear(uint16_t color) {
 
 void DisplayPort::header(const char* title, const char* right) {
   if (!_ready) return;
-  _gfx.fillRect(0, 0, width(), 42, 0x0186);
+  _gfx.fillRect(0, 0, width(), HEADER_HEIGHT, HEADER_BG);
   _gfx.setTextSize(2);
-  _gfx.setTextColor(COLOR_TEXT, 0x0186);
-  _gfx.setCursor(14, 13);
+  _gfx.setTextColor(COLOR_TEXT, HEADER_BG);
+  _gfx.setCursor(CHROME_INSET, 14);
   _gfx.print(title);
   if (right && right[0]) {
     int16_t x1 = 0;
@@ -117,18 +125,21 @@ void DisplayPort::header(const char* title, const char* right) {
     uint16_t tw = 0;
     uint16_t th = 0;
     _gfx.getTextBounds(right, 0, 0, &x1, &y1, &tw, &th);
-    _gfx.setCursor(max(14, static_cast<int>(width()) - static_cast<int>(tw) - 14), 13);
+    _gfx.setCursor(max(static_cast<int>(CHROME_INSET),
+                       static_cast<int>(width()) - static_cast<int>(tw) - CHROME_INSET),
+                   14);
     _gfx.print(right);
   }
 }
 
 void DisplayPort::footer(const char* left, const char* right) {
   if (!_ready) return;
-  _gfx.fillRect(0, height() - 34, width(), 34, COLOR_PANEL);
-  _gfx.drawFastHLine(0, height() - 35, width(), 0x39E7);
+  const int16_t top = height() - FOOTER_HEIGHT;
+  _gfx.fillRect(0, top, width(), FOOTER_HEIGHT, COLOR_PANEL);
+  _gfx.drawFastHLine(0, top - 1, width(), FOOTER_RULE);
   _gfx.setTextSize(2);
   _gfx.setTextColor(COLOR_DIM, COLOR_PANEL);
-  _gfx.setCursor(14, height() - 24);
+  _gfx.setCursor(CHROME_INSET, height() - 28);
   _gfx.print(left);
   if (right && right[0]) {
     int16_t x1 = 0;
@@ -136,7 +147,9 @@ void DisplayPort::footer(const char* left, const char* right) {
     uint16_t tw = 0;
     uint16_t th = 0;
     _gfx.getTextBounds(right, 0, 0, &x1, &y1, &tw, &th);
-    _gfx.setCursor(max(14, static_cast<int>(width()) - static_cast<int>(tw) - 14), height() - 24);
+    _gfx.setCursor(max(static_cast<int>(CHROME_INSET),
+                       static_cast<int>(width()) - static_cast<int>(tw) - CHROME_INSET),
+                   height() - 28);
     _gfx.print(right);
   }
 }
