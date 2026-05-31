@@ -27,6 +27,21 @@ jobs:
         with:
           submodules: recursive
 
+      - uses: actions/checkout@v4
+        with:
+          repository: dkyazzentwatwa/cypher-chat
+          path: deps/cypher-chat
+
+      - uses: actions/checkout@v4
+        with:
+          repository: dkyazzentwatwa/cypher-drive
+          path: deps/cypher-drive
+
+      - uses: actions/checkout@v4
+        with:
+          repository: dkyazzentwatwa/cypher-flock
+          path: deps/flock-you
+
       - name: Install arduino-cli
         run: |
           mkdir -p "$HOME/bin"
@@ -72,6 +87,22 @@ jobs:
             done <<< "${{ steps.prof.outputs.libs }}"
           fi
 
+      - name: Install app bundle libraries
+        run: |
+          while IFS= read -r lib; do
+            [ -z "$lib" ] && continue
+            arduino-cli lib install "$lib"
+          done <<'LIBS'
+          TinyGPSPlus
+          M5Cardputer
+          FastLED
+          IRremote
+          Adafruit SSD1306
+          Adafruit PN532
+          Adafruit ST7735 and ST7789 Library
+          Adafruit NeoPixel
+          LIBS
+
       - name: Compile ${{ matrix.profile }}
         run: |
           LIBARG=""
@@ -94,9 +125,25 @@ jobs:
           cp "$merged" "${{ matrix.asset }}"
           ls -l "${{ matrix.asset }}"
 
+      - name: Build SD card app bundle
+        env:
+          ARDUINO_LIB_ROOT: /home/runner/Arduino/libraries
+          WAVESHARE_OS_CYPHER_CHAT_DIR: deps/cypher-chat
+          WAVESHARE_OS_CYPHER_DRIVE_DIR: deps/cypher-drive
+          WAVESHARE_OS_FLOCK_YOU_DIR: deps/flock-you
+        run: |
+          ./tools/build-apps.sh
+          ./tools/package-sd.sh
+          release_tag="${{ github.event.inputs.tag || github.ref_name }}"
+          bundle="cypher-cube-sd-card-${release_tag}.zip"
+          (cd dist/sd-card && zip -qr "../../${bundle}" waveshare-os)
+          ls -l "${bundle}"
+
       - name: Attach to release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
-          files: ${{ matrix.asset }}
+          files: |
+            ${{ matrix.asset }}
+            cypher-cube-sd-card-${{ github.event.inputs.tag || github.ref_name }}.zip
           fail_on_unmatched_files: true
