@@ -16,6 +16,7 @@ VERSION="0.1.0"
 RETURN_LIB="${ROOT}/libraries/WaveshareAmoledReturn"
 APPKIT_LIB="${ROOT}/libraries/WaveshareAmoledAppKit"
 PORTS_LIB="${ROOT}/libraries/WaveshareAmoledPorts"
+AUDIO_LIB="${ROOT}/libraries/WaveshareAmoledAudio"
 CYPHERBOX_LIB="${ROOT}/libraries/WaveshareCypherboxPort"
 SENSORS_LIB="${ROOT}/libraries/WaveshareAmoledSensors"
 
@@ -37,6 +38,7 @@ LIB_FLAGS=(
   --library "${RETURN_LIB}"
   --library "${APPKIT_LIB}"
   --library "${PORTS_LIB}"
+  --library "${AUDIO_LIB}"
   --library "${CYPHERBOX_LIB}"
   --library "${SENSORS_LIB}"
 )
@@ -403,6 +405,9 @@ build_local "Cypherbox WiFi Tools" "cypherbox-wifi-tools" "cypherbox-wifi-tools.
 build_local "Cypherbox BLE Tools" "cypherbox-ble-tools" "cypherbox-ble-tools.bin" "cypherbox_port" "true" \
   "Touch, USB serial, and BLE Serial tools: BLE scan, spam, HID payloads, mouse jiggler, pairing, and SD file listing."
 
+build_local "Haunted Radio Operator" "gameos-haunted-radio-operator" "haunted-radio-operator.bin" "prototype" "true" \
+  "Touch-first fictional signal-capture game with optional ES8311 WAV assets stored on SD."
+
 # --- Utilities (bottom of the launcher menu) ---
 build_local "Tricorder" "tricorder" "tricorder.bin" "ready" "true" \
   "Battery, RTC, IMU, and strongest WiFi RSSI on one screen."
@@ -410,6 +415,8 @@ build_local "SD Status" "sd-status" "sd-status.bin" "ready" "true" \
   "Shows SD mount, capacity, usage, and catalog presence."
 build_local "Touch Diagnostics" "touch-diagnostics" "touch-diagnostics.bin" "ready" "true" \
   "AMOLED and FT3168 touch coordinate test with BOOT return."
+build_local "Audio Diagnostics" "audio-diagnostics" "audio-diagnostics.bin" "ready" "true" \
+  "ES8311 speaker playback test for 16-bit PCM WAV files stored on the SD card."
 
 python3 - "${CATALOG_TSV}" "${DIST}/apps.json" <<'PY'
 import csv

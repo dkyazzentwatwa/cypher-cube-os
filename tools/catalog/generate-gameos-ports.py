@@ -4,6 +4,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 APPS = ROOT / "apps"
 DOCS = ROOT / "docs" / "apps"
+MANUAL_PORT_SLUGS = {"haunted_radio_operator"}
 
 
 def action(label, result, hp, focus, kit, standing, wealth, xp, item):
@@ -509,6 +510,8 @@ def cpp_actions(actions) -> str:
 def main() -> None:
     DOCS.mkdir(parents=True, exist_ok=True)
     for game in GAMES:
+        if game["slug"] in MANUAL_PORT_SLUGS:
+            continue
         app_slug = dash_slug(game["slug"])
         app_dir = APPS / app_slug
         app_dir.mkdir(parents=True, exist_ok=True)

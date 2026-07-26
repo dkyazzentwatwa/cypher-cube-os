@@ -33,8 +33,10 @@ The current Cypher Cube catalog includes:
 - **Cypher Drive** - Direct AMOLED build from the Cypher Drive project.
 - **Cypher Chat** - Direct AMOLED build from the Cypher Chat project.
 - **Flock You** - Direct AMOLED build from the Flock You project.
+- **Haunted Radio Operator** - Touch-first fictional signal-capture game with optional SD audio.
 - **SD Status** - SD card and catalog path diagnostic.
 - **Touch Diagnostics** - Touchscreen and display sanity check.
+- **Audio Diagnostics** - SD-backed ES8311 WAV playback check.
 
 Per-app notes live in [docs/apps](docs/apps/README.md).
 

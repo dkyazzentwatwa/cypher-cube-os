@@ -32,6 +32,7 @@ enum ScreenMode {
   SCREEN_HOME,
   SCREEN_APPS,
   SCREEN_SETTINGS,
+  SCREEN_SOUND,
   SCREEN_SET_TIME,
   SCREEN_PICK_BOOT_APP,
   SCREEN_INFO,
@@ -59,6 +60,8 @@ bool appPartitionValid = false;
 bool bootToApp = false;
 bool touchWasDown = false;
 uint8_t brightness = AMOLED_BRIGHTNESS;
+uint8_t soundVolume = 70;
+bool soundMuted = false;
 char lastInstalled[40] = "";
 char lastSlug[32] = "";
 uint32_t lastSize = 0;
@@ -166,6 +169,9 @@ bool readAppMagic() {
 void loadPrefs() {
   prefs.begin(PREF_NS, false);
   brightness = prefs.getUChar("bright", AMOLED_BRIGHTNESS);
+  soundVolume = prefs.getUChar("soundVol", 70);
+  if (soundVolume > 100) soundVolume = 70;
+  soundMuted = prefs.getBool("soundMute", false);
   bootToApp = prefs.getBool("bootToApp", false);
   if (prefs.getBool("returnOnce", false)) {
     prefs.putBool("returnOnce", false);
@@ -184,6 +190,8 @@ void loadPrefs() {
 
 void savePrefs() {
   prefs.putUChar("bright", brightness);
+  prefs.putUChar("soundVol", soundVolume);
+  prefs.putBool("soundMute", soundMuted);
   prefs.putBool("bootToApp", bootToApp);
   prefs.putString("lastApp", lastInstalled);
   prefs.putString("lastSlug", lastSlug);
@@ -537,19 +545,36 @@ void drawSettings() {
              bootToApp ? "Boot: installed app" : "Boot: launcher");
   snprintf(buf, sizeof(buf), "Brightness: %u", brightness);
   drawButton(20, settingRowY(1), 328, SETTINGS_BTN_H, buf);
-  snprintf(buf, sizeof(buf), "Screen timeout: %s", timeoutLabel());
+  snprintf(buf, sizeof(buf), "Sound: %s %u%%", soundMuted ? "muted" : "on", soundVolume);
   drawButton(20, settingRowY(2), 328, SETTINGS_BTN_H, buf);
+  snprintf(buf, sizeof(buf), "Screen timeout: %s", timeoutLabel());
+  drawButton(20, settingRowY(3), 328, SETTINGS_BTN_H, buf);
   snprintf(buf, sizeof(buf), "Shake to home: %s",
            !WSensors::Imu::available() ? "no IMU" : (imuGesturesOn ? "on" : "off"));
-  drawButton(20, settingRowY(3), 328, SETTINGS_BTN_H, buf);
-  drawButton(20, settingRowY(4), 328, SETTINGS_BTN_H,
+  drawButton(20, settingRowY(4), 328, SETTINGS_BTN_H, buf);
+  drawButton(20, settingRowY(5), 328, SETTINGS_BTN_H,
              WSensors::Rtc::available() ? "Set time..." : "Set time (no RTC)");
   snprintf(buf, sizeof(buf), "Boot app: %s",
            defaultBootSlug[0] ? defaultBootSlug : "installed");
-  drawButton(20, settingRowY(5), 328, SETTINGS_BTN_H, buf);
-  drawButton(20, settingRowY(6), 328, SETTINGS_BTN_H, "Reload SD catalog");
-  drawButton(20, settingRowY(7), 328, SETTINGS_BTN_H, "Back");
+  drawButton(20, settingRowY(6), 328, SETTINGS_BTN_H, buf);
+  drawButton(20, settingRowY(7), 328, SETTINGS_BTN_H, "Reload SD catalog");
   display.footer("Tap setting", "BOOT: back");
+}
+
+void drawSoundSettings() {
+  display.clear();
+  display.header("Sound");
+  char buf[40];
+  snprintf(buf, sizeof(buf), "Volume: %u%%", soundVolume);
+  drawWrapped("These settings are stored on the device and are read by every app that uses the shared audio player.",
+              20, 62, 29, 3, COLOR_DIM);
+  drawButton(20, 156, 328, 54, buf, true, COLOR_ACCENT);
+  drawButton(20, 228, 154, 56, "- 10%", false, COLOR_TEXT);
+  drawButton(194, 228, 154, 56, "+ 10%", false, COLOR_TEXT);
+  drawButton(20, 304, 328, 56, soundMuted ? "Mute: ON" : "Mute: OFF",
+             soundMuted, soundMuted ? COLOR_WARN : COLOR_GOOD);
+  drawButton(20, 368, 328, 38, "Back", false, COLOR_DIM);
+  display.footer("Tap control", "BOOT: back");
 }
 
 void drawSetTime() {
@@ -718,6 +743,7 @@ void redraw() {
     case SCREEN_HOME: drawHome(); break;
     case SCREEN_APPS: drawApps(); break;
     case SCREEN_SETTINGS: drawSettings(); break;
+    case SCREEN_SOUND: drawSoundSettings(); break;
     case SCREEN_SET_TIME: drawSetTime(); break;
     case SCREEN_PICK_BOOT_APP: drawPickBootApp(); break;
     case SCREEN_INFO: drawInfo(); break;
@@ -1027,34 +1053,52 @@ void handleSettingsTap(uint16_t, uint16_t y) {
       savePrefs();
       break;
     case 2:
+      screenMode = SCREEN_SOUND;
+      redraw();
+      return;
+    case 3:
       cycleScreenTimeout();
       savePrefs();
       break;
-    case 3:
+    case 4:
       if (WSensors::Imu::available()) {
         imuGesturesOn = !imuGesturesOn;
         savePrefs();
       }
       break;
-    case 4:
+    case 5:
       if (WSensors::Rtc::available()) {
         enterSetTime();
         return;
       }
       break;
-    case 5:
+    case 6:
       screenMode = SCREEN_PICK_BOOT_APP;
       redraw();
       return;
-    case 6:
+    case 7:
       mountSd();
       loadManifest();
       break;
-    case 7:
-      screenMode = SCREEN_HOME;
-      break;
     default:
       return;
+  }
+  redraw();
+}
+
+void handleSoundTap(uint16_t x, uint16_t y) {
+  if (y >= 228 && y < 284) {
+    if (x < 184) {
+      soundVolume = soundVolume >= 10 ? soundVolume - 10 : 0;
+    } else {
+      soundVolume = soundVolume <= 90 ? soundVolume + 10 : 100;
+    }
+    savePrefs();
+  } else if (y >= 304 && y < 360) {
+    soundMuted = !soundMuted;
+    savePrefs();
+  } else if (y >= 368 && y < 406) {
+    screenMode = SCREEN_SETTINGS;
   }
   redraw();
 }
@@ -1170,7 +1214,8 @@ void goBack() {
   if (screenMode == SCREEN_HOME) return;
   if (screenMode == SCREEN_CONFIRM_INSTALL) {
     screenMode = SCREEN_APPS;
-  } else if (screenMode == SCREEN_SET_TIME || screenMode == SCREEN_PICK_BOOT_APP) {
+  } else if (screenMode == SCREEN_SOUND || screenMode == SCREEN_SET_TIME ||
+             screenMode == SCREEN_PICK_BOOT_APP) {
     screenMode = SCREEN_SETTINGS;
   } else {
     screenMode = SCREEN_HOME;
@@ -1256,6 +1301,7 @@ void printStatus() {
   Serial.printf("  installed=%s valid=%s\n", lastInstalled[0] ? lastInstalled : "none",
                 appPartitionValid ? "yes" : "no");
   Serial.printf("  boot=%s heap=%u\n", bootToApp ? "app" : "launcher", ESP.getFreeHeap());
+  Serial.printf("  sound=%u%% mute=%s\n", soundVolume, soundMuted ? "on" : "off");
   if (part) Serial.printf("  app1=0x%06X size=%uKB\n", part->address, part->size / 1024);
 }
 
@@ -1285,7 +1331,7 @@ void runSerialCommand(char* cmd) {
     return;
   }
   if (strcmp(cmd, "help") == 0) {
-    Serial.println("help, status, apps, reload, launch, erase, install <slug>, boot launcher, boot app, bright <0-255>, screen on|off");
+    Serial.println("help, status, apps, reload, launch, erase, install <slug>, boot launcher, boot app, bright <0-255>, sound [volume <0-100>|mute on|off], screen on|off");
     SerialShell::printHelp();
   } else if (strcmp(cmd, "status") == 0) {
     printStatus();
@@ -1325,6 +1371,31 @@ void runSerialCommand(char* cmd) {
       noteActivity();
       savePrefs();
       Serial.printf("brightness=%u\n", brightness);
+    }
+  } else if (strncmp(cmd, "sound", 5) == 0 && (cmd[5] == ' ' || cmd[5] == '\0')) {
+    const char* arg = cmd + 5;
+    while (*arg == ' ') arg++;
+    if (!*arg) {
+      Serial.printf("sound volume=%u mute=%s\n", soundVolume, soundMuted ? "on" : "off");
+    } else if (strncmp(arg, "volume ", 7) == 0) {
+      int value = atoi(arg + 7);
+      if (value < 0 || value > 100) {
+        Serial.println("sound volume must be 0 through 100");
+      } else {
+        soundVolume = static_cast<uint8_t>(value);
+        savePrefs();
+        Serial.printf("sound volume=%u\n", soundVolume);
+      }
+    } else if (strcmp(arg, "mute on") == 0) {
+      soundMuted = true;
+      savePrefs();
+      Serial.println("sound mute=on");
+    } else if (strcmp(arg, "mute off") == 0) {
+      soundMuted = false;
+      savePrefs();
+      Serial.println("sound mute=off");
+    } else {
+      Serial.println("sound [volume <0-100>|mute on|off]");
     }
   } else if (strcmp(cmd, "screen on") == 0) {
     wakeScreen();
@@ -1427,6 +1498,7 @@ void launcherLoop() {
     case SCREEN_HOME: handleHomeTap(tap.x, tap.y); break;
     case SCREEN_APPS: handleAppsTap(tap.x, tap.y); break;
     case SCREEN_SETTINGS: handleSettingsTap(tap.x, tap.y); break;
+    case SCREEN_SOUND: handleSoundTap(tap.x, tap.y); break;
     case SCREEN_SET_TIME: handleSetTimeTap(tap.x, tap.y); break;
     case SCREEN_PICK_BOOT_APP: handlePickBootAppTap(tap.x, tap.y); break;
     case SCREEN_INFO:

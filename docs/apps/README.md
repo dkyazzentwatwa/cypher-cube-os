@@ -8,6 +8,8 @@ Status meanings:
 - `ready`: direct Cypher Cube build or full local diagnostic app.
 - `cypherbox_port`: grouped Cypherbox Mini-derived wireless app adapted for
   Cypher Cube hardware, WiFi/BLE radio, touch, SD, and serial.
+- `prototype`: an installable early build whose interaction and hardware proof
+  are still being developed.
 - `build_failed`: source was discovered but did not compile; not installable.
 
 All installable app binaries are sketch `.bin` files intended for the launcher's
