@@ -10,6 +10,25 @@ Source route: direct AMOLED profile build from the sibling `cypher-drive` repo.
 - BOOT and touch behavior are controlled by the upstream app profile.
 - Launcher return is available through the `CypherPuterReturn.h`
   compatibility alias when the app calls the helper.
+- Includes the upstream **QR link** screen for a saved web link.
+
+## QR Link
+
+Open **QR link** from the Cypher Drive menu to show the saved URL as a
+scannable QR code. If no link is saved, the screen shows setup hints.
+
+Program the link over USB serial at `115200` baud:
+
+```text
+qr status
+qr set https://example.com
+qr show
+qr clear
+```
+
+The same QR commands are available over Nordic UART BLE while Cypher Drive is
+running. Connect to `CYPHER-DRIVE-QR`; the app pauses QR BLE advertising during
+active BLE scans and resumes it after scanning stops.
 
 ## SD Data
 

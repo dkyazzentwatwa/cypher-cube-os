@@ -68,6 +68,7 @@ add_lib "Adafruit_SSD1306"
 add_lib "Adafruit_PN532"
 add_lib "ESP8266_and_ESP32_OLED_driver_for_SSD1306_displays"
 add_lib "NimBLE-Arduino"
+add_lib "QRCode"
 
 json_record() {
   local name="$1"
