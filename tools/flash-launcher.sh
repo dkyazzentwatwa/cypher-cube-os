@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SKETCH="${ROOT}/build/launcher-source/waveshare-amoled-os"
 PORT="${1:-}"
 FQBN="esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,USBMode=hwcdc,CDCOnBoot=cdc,PartitionScheme=custom"
 
@@ -29,6 +30,11 @@ if [[ ! -f "${ROOT}/dist/launcher/waveshare-amoled-os.ino.bin" ]]; then
   "${ROOT}/tools/build-launcher.sh"
 fi
 
+if [[ ! -f "${SKETCH}/waveshare-amoled-os.ino" ]]; then
+  echo "[flash] staged launcher sketch missing; rebuilding"
+  "${ROOT}/tools/build-launcher.sh"
+fi
+
 echo "[flash] touching ${PORT} at 1200 baud"
 stty -f "${PORT}" 1200 || true
 sleep 2
@@ -43,6 +49,6 @@ echo "[flash] uploading on ${PORT}"
   --fqbn "${FQBN}" \
   --input-dir "${ROOT}/dist/launcher" \
   -p "${PORT}" \
-  "${ROOT}"
+  "${SKETCH}"
 
 echo "[flash] done"

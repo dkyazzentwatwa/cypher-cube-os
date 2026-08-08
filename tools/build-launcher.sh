@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OUT="${ROOT}/dist/launcher"
 STAGING_ROOT="${ROOT}/build/launcher-source"
-STAGING_SKETCH="${STAGING_ROOT}/cypher-cube-os"
+STAGING_SKETCH="${STAGING_ROOT}/waveshare-amoled-os"
 ARDUINO_LIB_ROOT="${ARDUINO_LIB_ROOT:-${HOME}/Documents/Arduino/libraries}"
 FQBN="esp32:esp32:esp32s3:FlashSize=16M,PSRAM=opi,USBMode=hwcdc,CDCOnBoot=cdc,PartitionScheme=custom"
 
@@ -28,6 +28,7 @@ rsync -a \
   --exclude "dist" \
   --exclude ".DS_Store" \
   "${ROOT}/" "${STAGING_SKETCH}/"
+mv "${STAGING_SKETCH}/cypher-cube-os.ino" "${STAGING_SKETCH}/waveshare-amoled-os.ino"
 
 echo "[launcher] compiling Waveshare AMOLED OS"
 "${ARDUINO_CLI}" compile \
